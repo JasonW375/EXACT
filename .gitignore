@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Model weights & checkpoints
+*.pth
+*.pt
+*.bin
+*.safetensors
+checkpoints/
+checkpoints_new/
+
+# Training data & large outputs
+*.nii.gz
+wandb/
+swanlog/
+output*/
+parameter_tuning_results*/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
