@@ -122,10 +122,6 @@ EXACT/
 | Test (in-dist.) | CT-RATE held-out | ~3,500 |
 | Test (out-of-dist.) | RAD-ChestCT / MianYang external | ~500 |
 
-![Dataset Statistics](assets/ext_fig3_disease_distribution.png)
-
-*Extended Data Fig. 3 | Disease distribution. Positive rates of 18 diseases across training set (CT-RATE), internal validation (CT-RATE), and two external validation sets (RAD-ChestCT, MianYang).*
-
 ### Data Sources
 
 - **CT-RATE** (primary): [https://huggingface.co/datasets/ibrahimhamamci/CT-RATE](https://huggingface.co/datasets/ibrahimhamamci/CT-RATE)
