@@ -3,9 +3,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset 
 import timm
-from datasets.dataset import NW_datasets
+from datasets.dataset import My_datasets
 from tensorboardX import SummaryWriter
-from models.vmunet.segmamba import SegMamba
+from models.vmunet.ygmamba import YMamba
 
 from engine import *
 import os
@@ -63,20 +63,20 @@ def main(config):
 
 
     print('#----------Preparing dataset----------#')
-    train_dataset = NW_datasets(config.train_data_path, train=True)
+    train_dataset = My_datasets(config.train_data_path, train=True)
     train_loader = DataLoader(train_dataset,
                                 batch_size=config.batch_size, 
                                 shuffle=True,
                                 pin_memory=True,
                                 num_workers=config.num_workers)
-    val_dataset = NW_datasets(config.train_data_path, val=True)
+    val_dataset = My_datasets(config.train_data_path, val=True)
     val_loader = DataLoader(val_dataset,
                                 batch_size=1,
                                 shuffle=False,
                                 pin_memory=True, 
                                 num_workers=config.num_workers,
                                 drop_last=True)
-    test_dataset = NW_datasets(config.test_data_path, test=True)  # Load test set.
+    test_dataset = My_datasets(config.test_data_path, test=True)  # Load test set.
     test_loader = DataLoader(test_dataset,
                             batch_size=1,
                             shuffle=False,
@@ -95,7 +95,7 @@ def main(config):
         'load_ckpt_path': None
     }
 
-    model = SegMamba(
+    model = YMamba(
         # Core parameters.
         in_chans=model_cfg['input_channels'],      # Number of input channels.
         num_classes=model_cfg['num_classes'],      # Number of segmentation output classes.
@@ -180,12 +180,11 @@ def main(config):
 
 
     if os.path.exists(os.path.join(checkpoint_dir, 'best.pth')):
-    # if os.path.exists('/path/to/lmx/work/Class_projects/bxg/CT_Report/CT_Report8_16abn_2decoder/results/segmamba__Saturday_04_January_2025_15h_02m_55s/checkpoints/best.pth'):  
+    
         print('#----------Testing----------#')  
         # Load checkpoint.
         checkpoint = torch.load(os.path.join(checkpoint_dir, 'best.pth'), map_location=torch.device('cpu'))
-        # checkpoint = torch.load('/path/to/lmx/work/Class_projects/bxg/CT_Report/CT_Report8_16abn_2decoder/results/segmamba__Saturday_04_January_2025_15h_02m_55s/checkpoints/best.pth',   
-                            # map_location=torch.device('cpu'))  
+
 
         # Load model weights from checkpoint.
         if torch.cuda.device_count() > 1:  

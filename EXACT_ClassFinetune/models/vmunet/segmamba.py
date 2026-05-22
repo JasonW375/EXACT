@@ -192,7 +192,7 @@ class MambaEncoder(nn.Module):
         x = self.forward_features(x)
         return x
 
-class SegMamba(nn.Module):  
+class YMamba(nn.Module):  
     def __init__(self, in_chans=1, num_classes=7, num_abnormal_classes=18, depths=[2, 2, 2, 2],   
                  feat_size=[48, 96, 192, 384], drop_path_rate=0, layer_scale_init_value=1e-6,   
                  hidden_size: int = 768, norm_name="instance", conv_block: bool = True,   

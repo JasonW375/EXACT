@@ -10,7 +10,7 @@ class setting_config:
     the config of training setting.
     """
 
-    network = 'segmamba'
+    network = 'ymamba'
     test_data_path = '/path/to/test_data.h5'
 
     pretrained_path = './pre_trained/'

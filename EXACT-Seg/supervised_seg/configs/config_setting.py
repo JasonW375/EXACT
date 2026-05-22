@@ -10,7 +10,7 @@ class setting_config:
     the config of training setting.
     """
 
-    network = 'segmamba'
+    network = 'ymamba'
     test_data_path = '/path/to/test_data.h5'
     train_data_path = '/path/to/train_data.h5'
     weight_only = False

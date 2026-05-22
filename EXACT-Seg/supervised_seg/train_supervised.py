@@ -6,7 +6,7 @@ import timm
 import h5py  
 from tensorboardX import SummaryWriter  
 from models.vmunet.vmunet import VMUNet  
-from models.vmunet.segmamba import SegMamba  
+from models.vmunet.ymamba import YMamba  
 from sklearn.model_selection import KFold  
 import numpy as np  
 import torch.nn.functional as F  
@@ -20,7 +20,7 @@ import wandb
 from pathlib import Path
 from datetime import datetime
 
-from datasets.dataset import NW_datasets_5fold  ,NW_datasets_supervised
+from datasets.dataset import My_datasets_5fold  ,My_datasets_supervised
 from engine_supervised import *  
 
 from utils import *  
@@ -58,7 +58,7 @@ def _pick_encoder_weights(sd):
 
 def load_encoder_only_into_wrapper(model_wrapper, ckpt_state_dict, logger=None):
     """
-    Load only encoder weights (vit, encoder1~encoder5) into SegMambaSegOnly.backbone.
+    Load only encoder weights (vit, encoder1~encoder5) into YMambaSegOnly.backbone.
     Supports wrappers under DataParallel.
     """
     enc_sd = _pick_encoder_weights(ckpt_state_dict)
@@ -71,17 +71,17 @@ def load_encoder_only_into_wrapper(model_wrapper, ckpt_state_dict, logger=None):
     print(msg)
     if logger is not None:
         logger.info(msg)
-class SegMambaSegOnly(nn.Module):
+class YMambaSegOnly(nn.Module):
     """
-    Wrap a SegMamba model and use only its encoder and segmentation decoder.
+    Wrap a YMamba model and use only its encoder and segmentation decoder.
     The forward pass returns only segmentation_output.
     When freeze_backbone=True, encoder params are frozen (requires_grad=False)
     without no_grad, so graph construction and gradient propagation are preserved.
     """
-    def __init__(self, segmamba: SegMamba, freeze_backbone: bool = False):
+    def __init__(self, YMamba: YMamba, freeze_backbone: bool = False):
         super().__init__()
         # Accept either a DataParallel wrapper or a plain model.
-        self.backbone = segmamba.module if isinstance(segmamba, nn.DataParallel) else segmamba
+        self.backbone = YMamba.module if isinstance(YMamba, nn.DataParallel) else YMamba
         self.freeze_backbone = freeze_backbone
 
         # If freezing is enabled, freeze encoder modules (including vit) only.
@@ -97,7 +97,7 @@ class SegMambaSegOnly(nn.Module):
             in_channels=self.backbone.feat_size[0],
             out_channels=1
         ).to(ref.device)
-        self.final_layer=nn.Conv3d(segmamba.num_abnormal_classes,1,kernel_size=1).to(ref.device)
+        self.final_layer=nn.Conv3d(YMamba.num_abnormal_classes,1,kernel_size=1).to(ref.device)
     def _encoder_modules(self):
         mods = []
         for name in ["vit", "encoder1", "encoder2", "encoder3", "encoder4", "encoder5"]:
@@ -172,21 +172,21 @@ def main(config,args):
 
 
     print('#----------Preparing dataset----------#')
-    train_dataset = NW_datasets_supervised(config.train_data_path, train=True)
+    train_dataset = My_datasets_supervised(config.train_data_path, train=True)
     train_loader = DataLoader(train_dataset,
                                 batch_size=config.batch_size, 
                                 shuffle=True,
                                 pin_memory=True,
                                 num_workers=config.num_workers)
-    val_dataset = NW_datasets_supervised(config.train_data_path, val=True)
+    val_dataset = My_datasets_supervised(config.train_data_path, val=True)
     val_loader = DataLoader(val_dataset,
                                 batch_size=1,
                                 shuffle=False,
                                 pin_memory=True, 
                                 num_workers=config.num_workers,
                                 drop_last=True)
-    test_dataset = NW_datasets_supervised(config.test_data_path, test=True)  # Load test set.
-    # test_dataset= NW_datasets_supervised(config.train_data_path, val=True)  # Load test set.
+    test_dataset = My_datasets_supervised(config.test_data_path, test=True)  # Load test set.
+    # test_dataset= My_datasets_supervised(config.train_data_path, val=True)  # Load test set.
     test_loader = DataLoader(test_dataset,
                             batch_size=1,
                             shuffle=False,
@@ -206,7 +206,7 @@ def main(config,args):
     }
 
 
-    full_model = SegMamba(  
+    full_model = YMamba(  
         # Basic parameters
         in_chans=model_cfg['input_channels'],      # Number of input channels
         num_classes=model_cfg["num_classes"], 
@@ -293,7 +293,7 @@ def main(config,args):
             # If checkpoint keys do not have "module." but current model is DataParallel, add the prefix.
             state_dict = {f'module.{k}': v for k, v in state_dict.items()}
         
-        model=SegMambaSegOnly(full_model)  # Wrap model to output segmentation only.
+        model=YMambaSegOnly(full_model)  # Wrap model to output segmentation only.
         model.load_state_dict(state_dict)
         model = model.to(device)
         if torch.cuda.device_count() > 1:
@@ -329,7 +329,7 @@ def main(config,args):
             # If checkpoint keys do not have "module." but current model is DataParallel, add the prefix.
             state_dict = {f'module.{k}': v for k, v in state_dict.items()}
         
-        # model=SegMambaSegOnly(full_model, freeze_backbone=False)  # Wrap model to output segmentation only.
+        # model=YMambaSegOnly(full_model, freeze_backbone=False)  # Wrap model to output segmentation only.
         # load_encoder_only_into_wrapper(model, state_dict, logger)
         # Load optimizer and scheduler states.
         
@@ -338,7 +338,7 @@ def main(config,args):
         weight_only = args.weight_only
 
         if not weight_only:
-            model=SegMambaSegOnly(full_model, freeze_backbone=args)
+            model=YMambaSegOnly(full_model, freeze_backbone=args)
             model.load_state_dict(state_dict)
             optimizer = get_optimizer(config, model)
             scheduler = get_scheduler(config, optimizer)
@@ -365,7 +365,7 @@ def main(config,args):
 
         else:
             full_model.load_state_dict(state_dict)
-            model=SegMambaSegOnly(full_model, freeze_backbone=args.freeze)
+            model=YMambaSegOnly(full_model, freeze_backbone=args.freeze)
 
             optimizer = get_optimizer(config, model)
             scheduler = get_scheduler(config, optimizer)
@@ -383,7 +383,7 @@ def main(config,args):
 
 
     else:
-        model=SegMambaSegOnly(full_model, freeze_backbone=False)  # Wrap model to output segmentation only.
+        model=YMambaSegOnly(full_model, freeze_backbone=False)  # Wrap model to output segmentation only.
         optimizer = get_optimizer(config, model)
         scheduler = get_scheduler(config, optimizer)
         epoch=0

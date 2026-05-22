@@ -159,6 +159,50 @@ python EXACT_Pretrain/data_preprocessed/flip_data.py
 
 ---
 
+## Pre-trained Checkpoints
+
+We provide all pre-trained model weights required to reproduce the results in this paper. Download from Google Drive:
+
+**[Download All Checkpoints (~6.3 GB)](https://drive.google.com/drive/folders/1i2J6XUqTm2G8m3-OlbH7Wt00aBxIpClf?usp=sharing)**
+
+After downloading, place the checkpoints under `EXACT/checkpoints/`:
+
+```
+EXACT/checkpoints/
+├── 01_pretrain/
+│   └── ymamba_pretrain_best.pth          # Y-Mamba foundation model (999 MB)
+├── 02_classification_finetune/
+│   └── classfine_best.pt                 # Supervised classifier head (1.2 GB)
+├── 03_segmentation_finetune/
+│   ├── seg_covid_best.pth                # COVID-19 segmentation (843 MB)
+│   ├── seg_mosmed_best.pth               # MosMed segmentation (843 MB)
+│   └── seg_rex_best.pth                  # ReX segmentation (843 MB)
+└── 04_exactchat_lora/
+    └── checkpoint-38000/                  # EXACT-CHAT LoRA weights (1.7 GB)
+        ├── adapter_config.json
+        ├── adapter_model.safetensors      # LoRA adapter weights
+        ├── non_lora_trainables.bin        # Projector + non-LoRA trainable params
+        ├── config.json
+        ├── special_tokens_map.json
+        ├── tokenizer.json
+        └── tokenizer_config.json
+```
+
+### Checkpoint–Task Mapping
+
+| Checkpoint | Used For |
+|-----------|----------|
+| `01_pretrain/ymamba_pretrain_best.pth` | Zero-shot multi-disease diagnosis; Zero-shot segmentation (AAmap thresholding) |
+| `02_classification_finetune/classfine_best.pt` | Supervised multi-disease classification |
+| `03_segmentation_finetune/seg_covid_best.pth` | Supervised segmentation on COVID-19 dataset |
+| `03_segmentation_finetune/seg_mosmed_best.pth` | Supervised segmentation on MosMed dataset |
+| `03_segmentation_finetune/seg_rex_best.pth` | Supervised segmentation on ReX dataset |
+| `04_exactchat_lora/checkpoint-38000/` | EXACT-CHAT report generation (merge with LLaMA-3.1-8B-Instruct) |
+
+> **Note:** The EXACT-CHAT checkpoint contains only inference-essential files. The base LLM (`meta-llama/Meta-Llama-3.1-8B-Instruct`) must be downloaded separately from [HuggingFace](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct).
+
+---
+
 ## Environment Setup
 
 EXACT has **two separate environments** due to conflicting dependency requirements between the foundation model (Mamba-SSM) and the language model (DeepSpeed + PEFT).
@@ -420,7 +464,7 @@ conda activate exact
 cd EXACT_Pretrain
 
 python test.py \
-    --resume_model /path/to/checkpoints/best.pth \
+    --resume_model ../checkpoints/01_pretrain/ymamba_pretrain_best.pth \
     --test_data_path /path/to/test_data
 ```
 
@@ -431,7 +475,7 @@ conda activate exact
 cd EXACT_ClassFinetune
 
 python test.py \
-    --resume_model /path/to/classfinetune/checkpoints/best.pth \
+    --resume_model ../checkpoints/02_classification_finetune/classfine_best.pt \
     --test_data_path /path/to/test_data
 ```
 
@@ -447,7 +491,8 @@ cd EXACT-Seg/supervised_seg
 
 python train_supervised.py \
     --task test \
-    --resume_model /path/to/seg/checkpoints/best.pth
+    --resume_model ../checkpoints/03_segmentation_finetune/seg_covid_best.pth
+    # Or: seg_mosmed_best.pth / seg_rex_best.pth depending on the target dataset
 ```
 
 ### Report Generation (EXACT-CHAT)
@@ -460,7 +505,7 @@ cd EXACT-CHAT
 
 python llava/serve/save_merged_model.py \
     --base_model meta-llama/Meta-Llama-3.1-8B-Instruct \
-    --lora_model ./checkpoints/llava-llama3.1_8B-finetune-lora/checkpoint-XXXXX \
+    --lora_model ../checkpoints/04_exactchat_lora/checkpoint-38000 \
     --output_dir ./checkpoints/merged_model
 ```
 
@@ -622,13 +667,13 @@ python evaluations/evaluate_llm.py \
 | Dataset | Models | DSC | HIT@5% | HIT@10% | AUPR | HIT@5% | HIT@10% |
 |---------|--------|-----|--------|---------|------|--------|---------|
 | ReX-Val (n=157) | RWKV-Unet | 0.112 [0.089, 0.135] | 0.312 | 0.242 | 0.180 [0.145, 0.219] | 0.580 | 0.465 |
-| | SegMamba | 0.198 [0.165, 0.230] | 0.556 | 0.494 | 0.187 [0.154, 0.223] | 0.556 | 0.494 |
+| | YMamba | 0.198 [0.165, 0.230] | 0.556 | 0.494 | 0.187 [0.154, 0.223] | 0.556 | 0.494 |
 | | **EXACT-Seg** | **0.215 [0.182, 0.249]** | **0.643** | **0.580** | **0.200 [0.165, 0.238]** | **0.592** | **0.478** |
 | COVID-19 (n=16) | RWKV-Unet | 0.305 [0.205, 0.412] | 0.812 | 0.812 | 0.404 [0.292, 0.513] | 0.875 | 0.812 |
-| | SegMamba | 0.332 [0.221, 0.450] | 0.812 | 0.750 | 0.358 [0.235, 0.493] | 0.750 | 0.750 |
+| | YMamba | 0.332 [0.221, 0.450] | 0.812 | 0.750 | 0.358 [0.235, 0.493] | 0.750 | 0.750 |
 | | **EXACT-Seg** | **0.476 [0.332, 0.621]** | **0.875** | **0.875** | **0.529 [0.374, 0.679]** | **0.875** | **0.875** |
 | MosMed (n=40) | RWKV-Unet | 0.348 [0.290, 0.405] | 0.950 | 0.875 | 0.373 [0.311, 0.438] | 0.950 | 0.850 |
-| | SegMamba | 0.352 [0.252, 0.378] | 0.850 | 0.850 | 0.324 [0.255, 0.393] | 0.825 | 0.800 |
+| | YMamba | 0.352 [0.252, 0.378] | 0.850 | 0.850 | 0.324 [0.255, 0.393] | 0.825 | 0.800 |
 | | **EXACT-Seg** | **0.454 [0.387, 0.520]** | **0.950** | **0.875** | **0.463 [0.393, 0.536]** | **0.925** | **0.900** |
 
 > **Note (EXACT-Seg vs. RWKV-Unet):** ReX-Val — Dice p = 0.028, AUPR p = 0.007; COVID-19 — Dice p < 0.001, AUPR p = 0.006; MosMed — Dice p < 0.001, AUPR p < 0.001.
