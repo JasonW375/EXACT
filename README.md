@@ -19,12 +19,12 @@
 
 ## About
 
-**EXACT** (**EX**plainable **A**bnormality-aware **C**hes**T** CT Foundation Model) is a 3D chest CT foundation model that unifies multi-disease diagnosis, lesion localization, segmentation, and radiology report generation in a single framework.
+**EXACT** (**EX**plainable **A**bnormality-aware **C**hes**T** CT Foundation Model) is a 3D chest CT foundation model that unifies multi-disease diagnosis, lesion localization, and radiology report generation in a single framework.
 
 EXACT extends our previous work **Chest-OMDL** (MIDL 2025) by introducing:
 - **Y-Mamba**: a dual-branch 3D state-space model that jointly encodes CT volumes and organ-prior maps, producing 18-channel voxel-level **Anomaly-aware Maps (AAmap)**.
 - **Multi-Instance Learning (MIL)**: weakly supervised pre-training driven purely by image-level disease labels automatically extracted from radiology reports.
-- **EXACT-CHAT**: a CT-specific vision-language model (based on LLaVA + LLaMA-3.1-8B) that takes AAmap embeddings as visual tokens and generates structured radiology reports.
+- **EXACT-CHAT**: a CT-specific vision-language model (based on LLaVA + LLaMA-3.1-8B-Instruct) that uses CT volume embeddings encoded by the frozen Y-Mamba backbone as visual tokens, while additionally injecting AAmap-derived per-disease classification results as text in the prompt, to generate structured radiology reports.
 
 Unlike CLIP-based models that produce only global embeddings, EXACT provides voxel-level explainability for both classification and localization, with no per-disease annotation required.
 
@@ -54,7 +54,7 @@ EXACT-Seg generates voxel-level anomaly segmentation masks directly from AAmaps,
 
 ![EXACT-CHAT Overview](assets/fig5_exactchat_overview.png)
 
-EXACT-CHAT is a CT-specific vision-language model that feeds frozen AAmap embeddings into LLaMA-3.1-8B-Instruct via an attentional pooling projector, generating structured radiology reports conditioned on disease diagnosis prompts.
+EXACT-CHAT is a CT-specific vision-language model that feeds CT volume embeddings produced by the frozen Y-Mamba backbone (pre-trained in Stage 1) into LLaMA-3.1-8B-Instruct via an attentional pooling projector. AAmap-derived per-disease classification results are additionally injected as text in the prompt, and the model generates structured radiology reports conditioned on this combined visual + diagnostic context.
 
 ---
 
@@ -92,7 +92,7 @@ EXACT/
 │   ├── llava/                   # Core LLaVA package (CT-adapted)
 │   │   ├── model/
 │   │   │   ├── multimodal_encoder/
-│   │   │   │   └── ct_clip.py           # CT-CLIP visual encoder
+│   │   │   │   └── ct_clip.py           # LLaVA vision-tower placeholder (visual features are pre-computed offline by the frozen Y-Mamba backbone and loaded as .npz)
 │   │   │   ├── multimodal_projector/
 │   │   │   │   ├── builder.py           # attn_pool + MLP projector
 │   │   │   │   └── coca_attentional_pooler.py
@@ -411,6 +411,8 @@ deepspeed --master_port 12438 llava/train/train_mem.py \
     --model_max_length 4096
 ```
 
+> **Note:** `--vision_tower openai/clip-vit-large-patch14-336` is a LLaVA-inherited placeholder argument. The actual visual features fed to the projector are pre-computed `.npz` embeddings produced offline by the frozen Y-Mamba backbone (Stage 1) — no CLIP forward pass is performed. The same applies to Stage 4b.
+
 ---
 
 ### Stage 4b – EXACT-CHAT LoRA Instruction Fine-tuning
@@ -509,43 +511,76 @@ python llava/serve/save_merged_model.py \
     --output_dir ./checkpoints/merged_model
 ```
 
-**Step 2 – Single-sample inference example:**
+**Step 2 – Pre-compute CT volume embeddings with the Y-Mamba backbone:**
+
+CT volumes must first be encoded into `.npz` embeddings using the Stage-1 Y-Mamba backbone. Each `.npz` stores the embedding under key `"arr"`. These embeddings are the visual tokens consumed by EXACT-CHAT.
+
+**Step 3 – Single-sample inference example:**
+
+The snippet below mirrors `llava/serve/ctchat_validation_llama.py` (the script used to produce the reported results) for a single sample.
 
 ```python
 import torch
+import numpy as np
+from llava.constants import IMAGE_TOKEN_INDEX
+from llava.conversation import conv_templates, SeparatorStyle
 from llava.model.builder import load_pretrained_model
-from llava.mm_utils import tokenizer_image_token
-from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+from llava.utils import disable_torch_init
+from llava.mm_utils import tokenizer_image_token, get_model_name_from_path
 
-# Load model
-tokenizer, model, image_processor, _ = load_pretrained_model(
-    model_path="./checkpoints/merged_model",
-    model_base=None,
-    model_name="llava_llama"
+disable_torch_init()
+model_path = "./checkpoints/merged_model"
+model_name = get_model_name_from_path(model_path)
+tokenizer, model, image_processor, context_len = load_pretrained_model(
+    model_path, model_base=None, model_name=model_name, device="cuda"
 )
 
-# Load CT embedding (pre-computed AAmap embedding, shape [N, D])
-import torch
-ct_embedding = torch.load("/path/to/sample_embedding.pt").unsqueeze(0).cuda()
+# Load pre-computed Y-Mamba CT embedding (.npz with key "arr")
+image_path = "/path/to/ct_embeddings/sample.npz"
+image = np.load(image_path)["arr"]
+image_size = image.size
+image_tensor = torch.tensor(image).to(model.device, dtype=torch.float16)
 
-# Build prompt
-prompt = f"{DEFAULT_IMAGE_TOKEN}\n<report_generation>Generate a structured radiology report for this chest CT."
-input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
+# Build prompt: question + AAmap-derived per-disease classification results (text)
+# Replace the 0/1 placeholders below with the actual per-disease predictions
+# obtained from EXACT_ClassFinetune (see utils/generate_report_json.py).
+disease_str = (
+    "Medical material=0; Arterial wall calcification=0; Cardiomegaly=0; "
+    "Pericardial effusion=0; Coronary artery wall calcification=0; Hiatal hernia=0; "
+    "Lymphadenopathy=0; Emphysema=0; Atelectasis=0; Lung nodule=0; Lung opacity=0; "
+    "Pulmonary fibrotic sequela=0; Pleural effusion=0; Mosaic attenuation pattern=0; "
+    "Peribronchial thickening=0; Consolidation=0; Bronchiectasis=0; "
+    "Interlobular septal thickening=0"
+)
+question = (
+    "<image>\nWrite a radiology report for the following CT scan. "
+    f"Known frontend model predictions (disease-wise): {disease_str}.<report_generation>"
+)
 
-# Generate
+conv = conv_templates["llama3"].copy()
+conv.append_message(conv.roles[0], question)
+conv.append_message(conv.roles[1], None)
+prompt = conv.get_prompt()
+
+input_ids = tokenizer_image_token(
+    prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
+).unsqueeze(0).to(model.device)
+
 with torch.inference_mode():
     output_ids = model.generate(
         input_ids,
-        images=ct_embedding,
+        images=image_tensor,
+        image_sizes=[image_size],
         do_sample=False,
-        temperature=0,
-        max_new_tokens=1024,
+        temperature=0.0,
+        max_new_tokens=512,
+        use_cache=True,
     )
 report = tokenizer.decode(output_ids[0], skip_special_tokens=True)
 print(report)
 ```
 
-**Step 3 – Multi-GPU batch validation:**
+**Step 4 – Multi-GPU batch validation:**
 
 ```bash
 python llava/serve/ctchat_validation_llama_multigpu.py \
@@ -554,6 +589,8 @@ python llava/serve/ctchat_validation_llama_multigpu.py \
     --image_folder /path/to/ct_embeddings/ \
     --output_file ./output_validation.json
 ```
+
+> **Note:** Each entry in `valid_vqa.json` should already contain the AAmap-derived per-disease prediction string injected into the human prompt (see [utils/generate_report_json.py](EXACT-CHAT/utils/generate_report_json.py) and [utils/filter_report_with_predictions.py](EXACT-CHAT/utils/filter_report_with_predictions.py) for the data-prep pipeline).
 
 ### Evaluation
 
