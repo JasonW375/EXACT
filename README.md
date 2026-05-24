@@ -1,4 +1,4 @@
-# EXACT: EXplainable Abnormality-aware ChesT CT Foundation Model
+# EXACT: EXplainable Anomaly-aware ChesT CT Foundation Model
 
 ---
 
@@ -19,14 +19,18 @@
 
 ## About
 
-**EXACT** (**EX**plainable **A**bnormality-aware **C**hes**T** CT Foundation Model) is a 3D chest CT foundation model that unifies multi-disease diagnosis, lesion localization, and radiology report generation in a single framework.
+**EXACT** (**EX**plainable **A**nomaly-aware **C**hes**T** CT Foundation Model) is an explainable anomaly-aware vision foundation model for 3D chest CT that unifies global disease understanding with voxel-level visual grounding in a single framework.
 
-EXACT extends our previous work **Chest-OMDL** (MIDL 2025) by introducing:
-- **Y-Mamba**: a dual-branch 3D state-space model that jointly encodes CT volumes and organ-prior maps, producing 18-channel voxel-level **Anomaly-aware Maps (AAmap)**.
-- **Multi-Instance Learning (MIL)**: weakly supervised pre-training driven purely by image-level disease labels automatically extracted from radiology reports.
-- **EXACT-CHAT**: a CT-specific vision-language model (based on LLaVA + LLaMA-3.1-8B-Instruct) that uses CT volume embeddings encoded by the frozen Y-Mamba backbone as visual tokens, while additionally injecting AAmap-derived per-disease classification results as text in the prompt, to generate structured radiology reports.
+Unlike prior CLIP-style 3D foundation models that compress volumetric features into global embeddings — and consequently lose the spatial information required for lesion localization and clinical interpretability — EXACT learns directly from the voxel level. It is pre-trained on **25,692** paired CT scans and radiology reports (21,304 patients, CT-RATE) under **anatomy-aware weak supervision**, jointly learning organ segmentation and multi-instance anomaly detection **without any manual voxel-level annotation**. The resulting **Anomaly-aware Maps (AAmaps)** simultaneously encode lesion extent and organ-specific pathological context.
 
-Unlike CLIP-based models that produce only global embeddings, EXACT provides voxel-level explainability for both classification and localization, with no per-disease annotation required.
+Key advantages:
+- **Intrinsic spatial interpretability.** A Y-shaped Mamba backbone (**Y-Mamba**) couples a shared encoder with an organ-segmentation decoder and a multi-instance anomaly-detection decoder, producing 18-channel voxel-level AAmaps directly — no post-hoc CAM or saliency tricks required.
+- **Anatomy-aware weak supervision.** Organ masks come automatically from Segment-Anything-by-Text; disease pseudo-labels come from RadBERT-parsed radiology reports. No radiologist-drawn lesion masks are needed at any stage.
+- **Five downstream capabilities from one pre-trained backbone.** Zero-shot multi-disease diagnosis, fine-tuned diagnosis, zero-shot anomaly localization, fine-tuned segmentation (EXACT-Seg), and visually grounded radiology report generation (EXACT-CHAT) — all driven by the same AAmap representation.
+- **Visually grounded radiology reports.** **EXACT-CHAT** is a multimodal AI assistant adapted from the LLaVA framework that integrates the frozen EXACT image encoder, a multimodal projector, and LLaMA-3.1-8B-Instruct. Structured diagnostic priors from the frozen AAmap classifier are additionally provided to the LLM as text tokens, encoding the predicted disease states across all target abnormalities. An optional GPT-4.1 refinement step yields **EXACT-CHAT (Refined)**, which calibrates the initial reports against upstream disease predictions to suppress hallucinations.
+- **Consistent SOTA across multinational, multi-center cohorts.** EXACT outperforms state-of-the-art 3D medical foundation models on internal (CT-RATE) and external (RAD-ChestCT, MianYang, ReX, COVID-19, MosMed) cohorts in all five tasks.
+
+EXACT builds on our prior work **Chest-OMDL** (MIDL 2025), extending it from organ-specific multi-disease detection into a general-purpose, voxel-level foundation model paradigm for 3D chest CT.
 
 ---
 
@@ -886,7 +890,7 @@ EXACT extends the following published work. If you find this project useful, ple
 
 ```bibtex
 @article{bai2025exact,
-  title   = {EXACT: EXplainable Abnormality-aware ChesT CT Foundation Model},
+  title   = {EXACT: EXplainable Anomaly-aware ChesT CT Foundation Model},
   author  = {Xuguang Bai and Mingxuan Liu and ...},
   journal = {--},
   year    = {2025}
