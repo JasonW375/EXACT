@@ -594,20 +594,99 @@ python llava/serve/ctchat_validation_llama_multigpu.py \
 
 ### Evaluation
 
+The full report-generation evaluation pipeline lives in [`EXACT-CHAT/evaluations/`](EXACT-CHAT/evaluations/). It computes the metrics reported in the paper:
+
+- **NLG metrics**: BLEU-1, METEOR, ROUGE-L, CIDEr (with optional 95% CI via bootstrap)
+- **Clinical accuracy** (RadBERT-F1 / Precision / Recall): generated reports are passed through RadBertClassifier to predict 18 pathologies, then compared against ground-truth labels
+- **CRG (Clinical Report Generation) score**
+
+#### One-time setup — download the RadBERT classifier and tokenizer
+
 ```bash
 conda activate exact-chat
-cd EXACT-CHAT
+cd EXACT-CHAT/evaluations
 
-# BLEU / METEOR / ROUGE-L / CIDEr (per question type)
-python evaluations/multi_metrics.py \
-    /path/to/valid_vqa_ground_truth.json \
-    ./output_validation.json
+# RadBertClassifier.pth (multi-label disease classifier, from the CT-RATE release)
+python download_model.py
 
-# LLM-based clinical accuracy scoring (requires LLaMA-3.1-70B)
-python evaluations/evaluate_llm.py \
-    ./output_validation.json \
-    /path/to/valid_vqa_ground_truth.json \
-    ./llm_scores.json
+# Backbone weights + tokenizer (roberta-base)
+python download_RoBERTa_tokenizer.py
+
+# Move the classifier weight into the same folder as the tokenizer
+mv RadBertClassifier.pth roberta_local/
+```
+
+This populates `./roberta_local/` with the model + tokenizer used by [classifier.py](EXACT-CHAT/evaluations/classifier.py) and [dataset.py](EXACT-CHAT/evaluations/dataset.py).
+
+#### Data layout
+
+The evaluation scripts expect a `BASE_DIR` containing one sub-folder per inference run, each holding:
+
+```
+<BASE_DIR>/<run_name>/
+├── result_transformat.json   # EXACT-CHAT outputs in evaluation format
+├── ground_truth.json         # paired references for NLG metrics
+└── ground_truth.csv          # 18-label binary ground truth for classification
+```
+
+`<run_name>` is the stem of the prediction JSON (e.g. `predictions_checkpoint38000_…`).
+
+#### Run evaluation
+
+Internal validation — **CT-RATE** (full pipeline: NLG + classification + CRG):
+
+```bash
+python evaluation.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/ctrate_eval_workdir
+
+# With 95% bootstrap confidence intervals:
+python evaluation_95ci.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/ctrate_eval_workdir
+```
+
+External validation — **RAD-ChestCT** (classification-only, two placeholder classes excluded):
+
+```bash
+python evaluation_radchest.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/radchest_eval_workdir
+
+python evaluation_radchest_95ci.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/radchest_eval_workdir
+```
+
+External validation — **MianYang** (full pipeline; `Mosaic attenuation pattern` excluded):
+
+```bash
+python evaluation_mianyang.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/mianyang_eval_workdir
+
+python evaluation_mianyang_95ci.py \
+    --prediction_jsons /path/to/predictions_<run>.json \
+    --base_dir         /path/to/mianyang_eval_workdir
+```
+
+Each script writes per-run metrics to `<base_dir>/<run_name>/metrics.json` and a cross-run summary to `<base_dir>/evaluation_summary.json`. You can pass multiple JSONs to `--prediction_jsons` to compare several checkpoints in one invocation.
+
+#### Stand-alone metric helpers
+
+If you already have CSV predictions/ground-truth pairs and just want one metric:
+
+```bash
+# Multi-label classification (precision / recall / F1 / accuracy)
+python calc_scores.py        --pred_csv preds.csv --gt_csv gt.csv --out_json cls.json
+python calc_scores_withci.py --pred_csv preds.csv --gt_csv gt.csv --out_json cls_ci.json
+
+# Clinical report generation score
+python crg_score.py --pred_csv preds.csv --gt_csv gt.csv --out_json crg.json
+
+# NLG metrics
+python nlg_metrics.py        --pred_json preds.json --gt_json gt.json --out_json nlg.json
+python nlg_metrics_withci.py --pred_json preds.json --gt_json gt.json --out_json nlg_ci.json
 ```
 
 ---
