@@ -4,61 +4,61 @@ import re
 import sys
 import os
 
-# 获取文件路径
+# Resolve the input file path
 if len(sys.argv) > 1:
     json_file = sys.argv[1]
 else:
     json_file = '/path/to/CT-CHAT2/VQA_dataset/by_category/report.json'
 
-# 检查文件是否存在
+# Check that the file exists
 if not os.path.exists(json_file):
-    print(f"错误: 文件 '{json_file}' 不存在")
-    print(f"用法: python {sys.argv[0]} <json文件路径>")
+    print(f"Error: file '{json_file}' does not exist")
+    print(f"Usage: python {sys.argv[0]} <json_file_path>")
     sys.exit(1)
 
-print(f"正在读取文件: {json_file}\n")
+print(f"Reading file: {json_file}\n")
 
-# 读取JSON文件
+# Load the JSON file
 with open(json_file, 'r', encoding='utf-8') as f:
     data = json.load(f)
 
-# 存储所有问题
+# Collect every report-generation question
 questions = []
 
-# 遍历数据提取问题
+# Walk the data and extract the questions
 for item in data:
     if 'conversations' in item:
         for conv in item['conversations']:
             if conv.get('from') == 'human' and conv.get('type') == 'report_generation':
-                # 提取问题部分（去除<image>标签和disease predictions部分）
+                # Keep only the question text (drop <image> and the disease predictions)
                 value = conv.get('value', '')
                 
-                # 使用正则表达式提取纯问题文本
-                # 移除<image>标签
+                # Extract the bare question with regular expressions
+                # Remove the <image> tag
                 question = re.sub(r'<image>', '', value)
-                # 提取问题部分（在"Known frontend model predictions"之前）
+                # Cut everything from "Known frontend model predictions" onwards
                 question = re.split(r'Known frontend model predictions', question)[0]
-                # 移除<report_generation>标签
+                # Remove the <report_generation> tag
                 question = re.sub(r'<report_generation>', '', question)
-                # 清理前后空白
+                # Trim surrounding whitespace
                 question = question.strip()
                 
                 if question:
                     questions.append(question)
 
-# 统计每种问题类型的出现次数
+# Count how often each question occurs
 question_counter = Counter(questions)
 
-# 输出结果
-print(f"总共有 {len(questions)} 个问题")
-print(f"不重复的问题类型有 {len(question_counter)} 种\n")
+# Print the results
+print(f"{len(questions)} questions in total")
+print(f"{len(question_counter)} distinct question types\n")
 print("=" * 80)
-print("各问题类型及其出现次数：\n")
+print("Question types and their frequencies:\n")
 
-# 按出现次数降序排列
+# Sort by descending frequency
 for question, count in question_counter.most_common():
-    print(f"次数: {count}")
-    print(f"问题: {question}")
+    print(f"Count: {count}")
+    print(f"Question: {question}")
     print("-" * 80)
 
-print("\n统计完成！")
+print("\nDone.")

@@ -13,6 +13,9 @@ class setting_config:
     network = 'ymamba'
     test_data_path = '/path/to/test_data.h5'
     train_data_path = '/path/to/train_data.h5'
+    # Only needed for stores that keep their lesion masks outside the HDF5 file
+    # (the ReXGroundingCT setup); see --mask-dir.
+    mask_dir = None
     weight_only = False
 
     pretrained_path = './pre_trained/'

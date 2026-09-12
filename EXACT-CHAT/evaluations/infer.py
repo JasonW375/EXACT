@@ -62,18 +62,17 @@ def run_inference(json_path: Path, model_path: Path, out_csv: Path):
     # ------------ Model -------------------------------------------------- #
     model = RadBertClassifier(n_classes=len(label_cols))
 
-    # === 最小必要修改：更健壮地加载权重，忽略 position_ids 等多余键 ===
+    # Load the checkpoint leniently: older saves carry extra buffers such as position_ids.
     state = torch.load(model_path, map_location="cpu")
-    if isinstance(state, dict) and "state_dict" in state:  # 兼容包含 state_dict 的保存方式
+    if isinstance(state, dict) and "state_dict" in state:  # some checkpoints nest the weights under "state_dict"
         state = state["state_dict"]
-    # 过滤掉旧版本保存的 buffer（如 position_ids），并允许非严格加载
+    # drop the legacy buffers, then load non-strictly
     state = {k: v for k, v in state.items() if "position_ids" not in k}
     missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
         print("[load_state_dict] missing keys:", missing)
     if unexpected:
         print("[load_state_dict] unexpected keys:", unexpected)
-    # === 修改结束 ===
 
     model = model.to(device).eval()
 

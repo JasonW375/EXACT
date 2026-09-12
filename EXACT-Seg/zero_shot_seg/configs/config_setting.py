@@ -11,6 +11,7 @@ class setting_config:
     """
 
     network = 'ymamba'
+    train_data_path = '/path/to/train_data.h5'
     test_data_path = '/path/to/test_data.h5'
 
     pretrained_path = './pre_trained/'

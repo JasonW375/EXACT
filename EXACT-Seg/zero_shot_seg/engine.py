@@ -1399,18 +1399,17 @@ def test_one_epoch(test_loader, model, segmentation_criterion,abnormal_criterion
     f1_per_disease = np.zeros(18)  
     auroc_per_disease = np.zeros(18)  
 
-    # 新增列表以收集每个疾病的 y_true 和 y_pred  
-    y_true_list = []  
-    y_pred_list = []  
+    # Collect per-disease y_true / y_pred for the aggregate curves below.
+    y_true_list = []
+    y_pred_list = []
 
-    roc_dir = "/path/to/lmx/work/Class_projects/bxg/test/test"  
-    os.makedirs(save_dir, exist_ok=True)  # 如果路径不存在，则创建 
-    # 创建一个字典保存所有疾病的数据  
-    data_dict = {} 
+    # ROC curves and the raw per-disease arrays go next to the other test outputs.
+    roc_dir = os.path.join(save_dir, "roc_curves")
+    os.makedirs(roc_dir, exist_ok=True)
+    data_dict = {}
 
-    best_thresholds_18 = np.array([0.5] * 18)  # 初始化每个疾病的最佳阈值 
-    # 循环处理每种疾病  
-    for disease_idx in range(18):  
+    best_thresholds_18 = np.array([0.5] * 18)  # per-disease operating point
+    for disease_idx in range(18):
         # 获取真实标签和预测概率  
         y_true = np.array(all_targets[disease_idx])  
         y_pred_proba = np.array(processed_predictions[disease_idx])  

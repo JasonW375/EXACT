@@ -199,7 +199,7 @@ class YMamba(nn.Module):
                  res_block: bool = True, spatial_dims=3) -> None:  
         super().__init__()  
 
-        # 基础参数设置  
+        # Basic configuration
         self.hidden_size = hidden_size  
         self.in_chans = in_chans  
         self.num_classes = num_classes  
@@ -210,45 +210,45 @@ class YMamba(nn.Module):
         self.layer_scale_init_value = layer_scale_init_value  
         self.spatial_dims = spatial_dims  
 
-        # 共享编码器  
+        # Shared encoder
         self.vit = MambaEncoder(in_chans, depths=depths, dims=feat_size, drop_path_rate=drop_path_rate, layer_scale_init_value=layer_scale_init_value)  
 
-        # 共享的基础编码块  
+        # Shared encoder blocks
         self.encoder1 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.in_chans, out_channels=self.feat_size[0], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
         self.encoder2 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.feat_size[1], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
         self.encoder3 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1], out_channels=self.feat_size[2], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
         self.encoder4 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[2], out_channels=self.feat_size[3], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
         self.encoder5 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3], out_channels=self.hidden_size, kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
 
-        # 分割任务的解码器  
+        # Segmentation decoder
         self.seg_decoder5 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.hidden_size, out_channels=self.feat_size[3], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.seg_decoder4 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3], out_channels=self.feat_size[2], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.seg_decoder3 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[2], out_channels=self.feat_size[1], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.seg_decoder2 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1], out_channels=self.feat_size[0], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.seg_decoder1 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.feat_size[0], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)  
 
-        # 异常检测任务的解码器 - 注意调整了输入通道数以适应特征融合  
+        # Abnormality decoder; input channels account for the fused features
         self.abn_decoder5 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.hidden_size, out_channels=self.feat_size[3], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.abn_decoder4 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[3]*2, out_channels=self.feat_size[2], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.abn_decoder3 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[2]*2, out_channels=self.feat_size[1], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.abn_decoder2 = UnetrUpBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1]*2, out_channels=self.feat_size[0], kernel_size=3, upsample_kernel_size=2, norm_name=norm_name, res_block=res_block)  
         self.abn_decoder1 = UnetrBasicBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0]*2, out_channels=self.feat_size[0], kernel_size=3, stride=1, norm_name=norm_name, res_block=res_block)
 
-        # 输出头  
+        # Output heads
         self.final_conv_segmentation = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.num_classes)  
-        # 异常检测的两个输出头  
-        self.final_conv_abnormal_low = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1], out_channels=self.num_abnormal_classes)  # 低分辨率输出  
-        self.final_conv_abnormal_high = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.num_abnormal_classes)  # 高分辨率输出  
+        # Two abnormality heads, one per resolution
+        self.final_conv_abnormal_low = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[1], out_channels=self.num_abnormal_classes)  # low-resolution output
+        self.final_conv_abnormal_high = UnetOutBlock(spatial_dims=spatial_dims, in_channels=self.feat_size[0], out_channels=self.num_abnormal_classes)  # high-resolution output
         
-        # 激活函数  
+        # Activations
         self.activation_segmentation = nn.Sigmoid()  
         self.activation_abnormal = nn.Sigmoid()
 
     def forward(self, x_in):  
-        # 获取编码器特征  
+        # Encoder features
         outs = self.vit(x_in)  
         
-        # 共享编码器前向传播  
+        # Shared encoder forward pass
         enc1 = self.encoder1(x_in)  
         # print("enc1 shape:", enc1.shape)  
         x2 = outs[0]  
@@ -266,7 +266,7 @@ class YMamba(nn.Module):
         enc_hidden = self.encoder5(outs[3])  
         # print("enc_hidden shape:", enc_hidden.shape)
 
-        # 分割解码器分支  
+        # Segmentation branch
         seg_dec4 = self.seg_decoder5(enc_hidden, enc4)  
         # print(f"seg_dec4 shape: {seg_dec4.shape}")  
         seg_dec3 = self.seg_decoder4(seg_dec4, enc3)  
@@ -278,7 +278,7 @@ class YMamba(nn.Module):
         seg_out = self.seg_decoder1(seg_dec1)  
         # print(f"seg_out shape: {seg_out.shape}")  
 
-        # 异常检测解码器分支 - 直接融合特征  
+        # Abnormality branch, fusing the encoder features directly
         abn_dec4 = self.abn_decoder5(enc_hidden, enc4)  
         # print(f"abn_dec4 shape: {abn_dec4.shape}")  
         fused_dec4 = torch.cat([abn_dec4, seg_dec4], dim=1)  
@@ -294,7 +294,7 @@ class YMamba(nn.Module):
         abnormal_output_low = self.activation_abnormal(self.final_conv_abnormal_low(abn_dec2))  
         # print(f"abnormal_output_low shape: {abnormal_output_low.shape}")  
 
-        # 继续上采样得到高分辨率输出  
+        # Upsample again for the high-resolution output
         abn_dec1 = self.abn_decoder2(fused_dec2, enc1)  
         # print(f"abn_dec1 shape: {abn_dec1.shape}")  
         fused_dec1 = torch.cat([abn_dec1, seg_dec1], dim=1)  
@@ -304,7 +304,7 @@ class YMamba(nn.Module):
         abnormal_output_high = self.activation_abnormal(self.final_conv_abnormal_high(abn_out))   
         # print(f"abnormal_output_high shape: {abnormal_output_high.shape}")  
 
-        # 最终输出  
+        # Final outputs
         segmentation_output = self.activation_segmentation(  
             self.final_conv_segmentation(seg_out)  
         )  
@@ -312,6 +312,6 @@ class YMamba(nn.Module):
         
         return (  
         segmentation_output,  
-        [abnormal_output_low, abnormal_output_high]  # 返回低分辨率和高分辨率的异常检测结果  
+        [abnormal_output_low, abnormal_output_high]  # low- and high-resolution abnormality outputs
     ) 
 

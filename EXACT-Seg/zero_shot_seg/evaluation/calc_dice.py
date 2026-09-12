@@ -8,13 +8,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 PRED_THRESHOLD = 0.5
 GT_THRESHOLD = 0.0
 
-# Default data paths (can be overridden by command-line arguments)
-gt_dir = "/path/to/%%%/visualization_mask"
-pred_dir = "/path/to/%%%/overlaid_heatmaps_covidfull"
-
-# Output path
-out_all = f"{pred_dir}/dice_scores_all.csv"
-
 
 def _strip_nii_suffix(name: str) -> str:
     base = os.path.basename(name)
@@ -224,14 +217,15 @@ def main():
     parser.add_argument(
         "--pred_dir",
         type=str,
-        default=None,
-        help="Prediction directory, overrides default"
+        required=True,
+        help="Binary masks written by threshold_overlay.py"
     )
     parser.add_argument(
         "--gt_dir",
         type=str,
-        default=None,
-        help="GT directory, overrides default"
+        required=True,
+        help="Ground-truth lesion masks, one {study_id}.nii.gz per study, "
+             "on the same grid as the predictions (see datasets/resize.py)"
     )
     parser.add_argument(
         "--pred_threshold",
@@ -253,8 +247,8 @@ def main():
     )
     args = parser.parse_args()
 
-    gt_d = args.gt_dir if args.gt_dir else gt_dir
-    pred_d = args.pred_dir if args.pred_dir else pred_dir
+    gt_d = args.gt_dir
+    pred_d = args.pred_dir
     out_csv = os.path.join(pred_d, "dice_scores_all_per_sample_mean.csv")
 
     if not os.path.isdir(gt_d):

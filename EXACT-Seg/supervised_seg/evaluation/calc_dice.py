@@ -10,16 +10,6 @@ PIXEL_MIN = 100000
 PRED_THRESHOLD = 0.5
 GT_THRESHOLD = 0.0
 
-# Default data paths (can be overridden by command-line arguments)
-gt_dir = "/path/to/%%%/visualization_mask"
-pred_dir = "/path/to/%%%/overlaid_heatmaps_covidfull"
-json_path = "/path/to/%%%/dataset.json"
-
-# Output paths (actual generated filenames may be *_per_sample_mean.csv)
-out_high = f"{pred_dir}/dice_scores_gt100k.csv"
-out_low = f"{pred_dir}/dice_scores_lt100k.csv"
-out_all = f"{pred_dir}/dice_scores_all.csv"
-
 
 def _strip_nii_suffix(name: str) -> str:
     base = os.path.basename(name)
@@ -266,14 +256,14 @@ def main():
     parser.add_argument(
         "--pred_dir",
         type=str,
-        default=None,
-        help="Prediction directory, overrides default"
+        required=True,
+        help="Directory of predicted masks, one {study_id}.nii.gz per study"
     )
     parser.add_argument(
         "--gt_dir",
         type=str,
-        default=None,
-        help="GT directory, overrides default"
+        required=True,
+        help="Directory of ground-truth masks on the same grid as the predictions"
     )
     parser.add_argument(
         "--pred_threshold",
@@ -296,8 +286,13 @@ def main():
     args = parser.parse_args()
 
     pixel_min = args.pixel_min
-    gt_d = args.gt_dir if args.gt_dir else gt_dir
-    pred_d = args.pred_dir if args.pred_dir else pred_dir
+    gt_d = args.gt_dir
+    pred_d = args.pred_dir
+
+    # Per-sample CSVs land next to the predictions being scored.
+    out_high = os.path.join(pred_d, "dice_scores_gt100k.csv")
+    out_low = os.path.join(pred_d, "dice_scores_lt100k.csv")
+    out_all = os.path.join(pred_d, "dice_scores_all.csv")
 
     if not os.path.isdir(gt_d):
         raise FileNotFoundError(f"GT directory does not exist: {gt_d}")
@@ -311,9 +306,11 @@ def main():
 
     # split / both require JSON-based grouping
     if args.mode in ("split", "both"):
-        json_p = args.json if args.json else json_path
+        json_p = args.json
         if not json_p or not os.path.exists(json_p):
-            raise FileNotFoundError(f"A pixel statistics JSON file is required, but was not found: {json_p}")
+            raise FileNotFoundError(
+                f"--mode {args.mode} groups samples by lesion size, which needs "
+                f"--json to point at the pixel statistics file; got: {json_p}")
 
         pixel_sums = load_pixel_sums(json_p)
 

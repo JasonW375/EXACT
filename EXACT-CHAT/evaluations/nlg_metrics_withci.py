@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Compute NLG scores with 95% confidence intervals using Bootstrap method (with parallel processing).
-修复METEOR在并行处理中的pickle问题
+Fixes the METEOR pickling failure under parallel processing.
 """
 
 import argparse
@@ -20,15 +20,15 @@ from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
 
-# 抑制警告
+# Silence warnings
 warnings.filterwarnings('ignore')
 
 # ------------------------------------------------------------------ #
-# 时间格式化工具
+# Time formatting helpers
 # ------------------------------------------------------------------ #
 
 def format_time(seconds):
-    """格式化时间显示"""
+    """Format a duration for display."""
     if seconds < 60:
         return f"{seconds:.1f}s"
     elif seconds < 3600:
@@ -41,59 +41,59 @@ def format_time(seconds):
         return f"{hours}h {mins}m"
 
 # ------------------------------------------------------------------ #
-# Bootstrap置信区间计算
+# Bootstrap confidence intervals
 # ------------------------------------------------------------------ #
 
 def compute_single_score(gts_subset, res_subset, scorer):
     """
-    计算单个子集的分数
+    Compute the score for a single subset.
     
     Args:
-        gts_subset: 真值子集 {idx: [text]}
-        res_subset: 预测子集 {idx: [text]}
-        scorer: 评分器对象
+        gts_subset: ground-truth subset {idx: [text]}
+        res_subset: prediction subset {idx: [text]}
+        scorer: scorer object
     
     Returns:
-        分数（单个值或列表）
+        score (a single value, or a list for multi-score metrics)
     """
     try:
         score, _ = scorer.compute_score(gts_subset, res_subset, verbose=0)
     except TypeError:
         score, _ = scorer.compute_score(gts_subset, res_subset)
     except FileNotFoundError:
-        # METEOR需要Java
+        # METEOR requires Java
         return None
     
     return score
 
 
-# ← 修改：添加scorer_type参数，在子进程中重新创建scorer
+# scorer_type lets each worker rebuild its own scorer instead of shipping one across processes.
 def _single_bootstrap_sample(seed, gts, res, scorer_type, metric_names, indices):
     """
-    执行单次Bootstrap采样并计算分数
+    Run one bootstrap resample and score it.
     
     Args:
-        seed: 随机种子
-        gts: 完整的真值集
-        res: 完整的预测集
-        scorer_type: 评分器类型字符串 ('bleu', 'rouge', 'cider', 'meteor')
-        metric_names: 指标名称
-        indices: 所有样本的索引列表
+        seed: random seed
+        gts: full ground-truth set
+        res: full prediction set
+        scorer_type: scorer kind ('bleu', 'rouge', 'cider', 'meteor')
+        metric_names: metric names
+        indices: list of indices over all samples
     
     Returns:
-        该次采样的分数（单个值或列表）
+        score for this resample (a single value, or a list for BLEU)
     """
     rng = np.random.RandomState(seed)
     n_samples = len(indices)
     
-    # 有放回抽样
+    # Sample with replacement
     sampled_indices = rng.choice(indices, size=n_samples, replace=True)
     
-    # 创建子集
+    # Build the resampled subsets
     gts_subset = {i: gts[idx] for i, idx in enumerate(sampled_indices)}
     res_subset = {i: res[idx] for i, idx in enumerate(sampled_indices)}
     
-    # ← 关键修改：在子进程中重新创建scorer对象
+    # Rebuild the scorer inside the worker process
     if scorer_type == 'bleu':
         scorer = Bleu(4)
     elif scorer_type == 'rouge':
@@ -105,7 +105,7 @@ def _single_bootstrap_sample(seed, gts, res, scorer_type, metric_names, indices)
     else:
         raise ValueError(f"Unknown scorer type: {scorer_type}")
     
-    # 计算分数
+    # Score the resample
     score = compute_single_score(gts_subset, res_subset, scorer)
     
     return score
@@ -114,17 +114,17 @@ def _single_bootstrap_sample(seed, gts, res, scorer_type, metric_names, indices)
 def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000, 
                 confidence_level=0.95, random_state=42, n_jobs=-1):
     """
-    使用Bootstrap方法计算置信区间（并行版本，修复METEOR pickle问题）
+    Compute confidence intervals via the bootstrap (parallel; works around METEOR's pickle issue).
     
     Args:
-        gts: 完整的真值集 {idx: [text]}
-        res: 完整的预测集 {idx: [text]}
-        scorer: 评分器对象
-        metric_names: 指标名称（字符串或列表）
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
-        n_jobs: 并行核心数 (-1表示使用所有核心)
+        gts: full ground-truth set {idx: [text]}
+        res: full prediction set {idx: [text]}
+        scorer: scorer object
+        metric_names: metric names (a string or a list)
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
+        n_jobs: number of parallel workers (-1 uses every core)
     
     Returns:
         tuple: (results_dict, point_time, bootstrap_time)
@@ -133,14 +133,14 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
     n_samples = len(gts)
     indices = list(gts.keys())
     
-    # 计算点估计
+    # Point estimate
     print(f"    Computing point estimate...", end=' ', flush=True)
     point_start = time.time()
     point_scores = compute_single_score(gts, res, scorer)
     point_time = time.time() - point_start
     
     if point_scores is None:
-        # METEOR失败（Java不可用）
+        # METEOR failed (Java unavailable)
         print(f"Failed (Java not available)")
         if isinstance(metric_names, list):
             return {name: None for name in metric_names}, 0, 0
@@ -149,7 +149,7 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
     
     print(f"Done ({format_time(point_time)})")
     
-    # ← 修改：确定scorer类型
+    # Identify the scorer kind so workers can rebuild it
     if isinstance(scorer, Bleu):
         scorer_type = 'bleu'
     elif isinstance(scorer, Rouge):
@@ -161,10 +161,10 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
     else:
         scorer_type = 'unknown'
     
-    # 使用并行Bootstrap采样
+    # Parallel bootstrap resampling
     print(f"    Bootstrap sampling ({n_bootstraps} iterations) with parallel processing:", flush=True)
     
-    # 确定实际使用的核心数
+    # Resolve the number of workers to use
     if n_jobs == -1:
         actual_jobs = mp.cpu_count()
     else:
@@ -174,36 +174,36 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
     
     bootstrap_start = time.time()
     
-    # ← 修改：传递scorer_type而不是scorer对象
+    # Pass scorer_type rather than the scorer object
     bootstrapped_scores = Parallel(n_jobs=n_jobs, verbose=5)(
         delayed(_single_bootstrap_sample)(
             random_state + i,
             gts, 
             res, 
-            scorer_type,  # ← 传递类型字符串
+            scorer_type,  # scorer kind, not the object
             metric_names,
             indices
         )
         for i in range(n_bootstraps)
     )
     
-    # 过滤掉None值（如果有的话）
+    # Drop any failed resamples
     bootstrapped_scores = [s for s in bootstrapped_scores if s is not None]
     
     bootstrap_time = time.time() - bootstrap_start
     print(f"      Completed: {len(bootstrapped_scores)}/{n_bootstraps} samples in {format_time(bootstrap_time)}")
     
-    # 计算置信区间
+    # Confidence interval
     alpha = (1 - confidence_level) / 2
     results = {}
     
     if isinstance(metric_names, list):
-        # BLEU返回多个分数
+        # BLEU returns several scores
         point_scores_list = point_scores if isinstance(point_scores, (list, tuple)) else [point_scores]
         
         for i, name in enumerate(metric_names):
             if len(bootstrapped_scores) > 0:
-                # 提取第i个指标的所有bootstrap值
+                # All bootstrap values for the i-th metric
                 metric_bootstrap = [scores[i] for scores in bootstrapped_scores]
                 ci_lower = np.percentile(metric_bootstrap, alpha * 100)
                 ci_upper = np.percentile(metric_bootstrap, (1 - alpha) * 100)
@@ -215,7 +215,7 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
             
             results[name] = f"{point:.4f} [{ci_lower:.4f}, {ci_upper:.4f}]"
     else:
-        # 单个分数（ROUGE, CIDEr, METEOR）
+        # Single-score metrics (ROUGE, CIDEr, METEOR)
         if len(bootstrapped_scores) > 0:
             ci_lower = np.percentile(bootstrapped_scores, alpha * 100)
             ci_upper = np.percentile(bootstrapped_scores, (1 - alpha) * 100)
@@ -232,15 +232,15 @@ def bootstrap_ci(gts, res, scorer, metric_names, n_bootstraps=1000,
 def compute_scores_with_ci(gts, res, n_bootstraps=1000, confidence_level=0.95, 
                           random_state=42, n_jobs=-1):
     """
-    计算所有NLG指标及其95%置信区间（并行版本）
+    Compute every NLG metric with its 95% confidence interval (parallel).
     
     Args:
-        gts: 真值 {idx: [text]}
-        res: 预测 {idx: [text]}
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
-        n_jobs: 并行核心数
+        gts: ground truth {idx: [text]}
+        res: predictions {idx: [text]}
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
+        n_jobs: number of parallel workers
     
     Returns:
         tuple: (scores_dict, timing_info)
@@ -259,7 +259,7 @@ def compute_scores_with_ci(gts, res, n_bootstraps=1000, confidence_level=0.95,
         metric_name = names if isinstance(names, str) else 'BLEU'
         
         print(f"\n{'='*60}")
-        print(f"📊 Computing {metric_name} with 95% CI...")
+        print(f"\nComputing {metric_name} with 95% CI...")
         print(f"{'='*60}")
         
         metric_start = time.time()
@@ -280,24 +280,24 @@ def compute_scores_with_ci(gts, res, n_bootstraps=1000, confidence_level=0.95,
             }
             
             if isinstance(names, list):
-                # BLEU返回多个指标
+                # BLEU returns several metrics
                 for name, value in results.items():
                     if value is not None:
                         out[name] = value
                 
-                # 计算BLEU_mean的置信区间
+                # Confidence interval for BLEU_mean
                 if all(out.get(f"BLEU_{i}") is not None for i in range(1, 5)):
-                    # 从字符串中提取数值
+                    # Parse the numbers back out of the formatted strings
                     bleu_values = []
                     for i in range(1, 5):
                         val_str = out[f"BLEU_{i}"]
                         val = float(val_str.split('[')[0].strip())
                         bleu_values.append(val)
                     
-                    # 计算BLEU_mean
+                    # BLEU_mean
                     mean_val = sum(bleu_values) / len(bleu_values)
                     
-                    # 对BLEU_mean也计算CI
+                    # Confidence interval for BLEU_mean
                     ci_lowers = []
                     ci_uppers = []
                     for i in range(1, 5):
@@ -311,26 +311,26 @@ def compute_scores_with_ci(gts, res, n_bootstraps=1000, confidence_level=0.95,
                     
                     out["BLEU_mean"] = f"{mean_val:.4f} [{mean_ci_lower:.4f}, {mean_ci_upper:.4f}]"
                 
-                print(f"\n  ✅ {metric_name} completed in {format_time(metric_elapsed)}")
+                print(f"\n  {metric_name} completed in {format_time(metric_elapsed)}")
                 print(f"     Point estimate: {format_time(point_time)}")
                 print(f"     Bootstrap: {format_time(bootstrap_time)}")
             else:
-                # 单个指标
+                # Single-score metric
                 if results[names] is not None:
                     out[names] = results[names]
-                    print(f"\n  ✅ {metric_name}: {results[names]}")
+                    print(f"\n  {metric_name}: {results[names]}")
                     print(f"     Time: {format_time(metric_elapsed)} "
                           f"(point: {format_time(point_time)}, bootstrap: {format_time(bootstrap_time)})")
                 else:
-                    print(f"\n  ⚠️  {metric_name} skipped (Java not found)")
+                    print(f"\n  {metric_name} skipped (Java not found)")
         
         except FileNotFoundError:
-            print(f"\n  ⚠️  Java not found → skipping METEOR")
+            print(f"\n  Java not found; skipping METEOR")
             continue
         except Exception as e:
-            print(f"\n  ⚠️  Error: {e}")
+            print(f"\n  Error: {e}")
             import traceback
-            traceback.print_exc()  # ← 添加详细错误信息
+            traceback.print_exc()  # full traceback for debugging
             continue
     
     return out, timing_info
@@ -341,23 +341,23 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
         n_bootstraps: int = 1000, confidence_level: float = 0.95,
         random_state: int = 42, n_jobs: int = -1):
     """
-    运行NLG评估（含95% CI、时间统计和并行处理）
+    Run the NLG evaluation with 95% CIs, timing statistics and parallel processing.
     
     Args:
-        pred_json: 预测JSON文件
-        gt_json: 真值JSON文件
-        out_json: 输出JSON文件
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
-        n_jobs: 并行核心数 (-1表示使用所有核心)
+        pred_json: predictions JSON file
+        gt_json: ground-truth JSON file
+        out_json: output JSON file
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
+        n_jobs: number of parallel workers (-1 uses every core)
     """
     script_start = time.time()
     
     actual_jobs = mp.cpu_count() if n_jobs == -1 else min(n_jobs, mp.cpu_count())
     
     print(f"\n{'='*60}")
-    print(f"🚀 NLG Evaluation with 95% CI (Parallel Processing)")
+    print(f"NLG Evaluation with 95% CI (Parallel Processing)")
     print(f"{'='*60}")
     print(f"Configuration:")
     print(f"  Bootstrap samples: {n_bootstraps}")
@@ -368,7 +368,7 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
     print(f"  Predictions: {pred_json}")
     print(f"  Ground truth: {gt_json}")
     
-    # 加载数据
+    # Load data
     load_start = time.time()
     
     with open(pred_json, "r", encoding="utf-8") as f:
@@ -381,13 +381,13 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
     
     load_time = time.time() - load_start
     
-    # 构建映射
+    # Build the lookups
     pred_map = {x["input_image_name"].rsplit(".", 1)[0]: x["report"]
                 for x in pred_items}
     gt_map   = {x["input_image_name"].rsplit(".", 1)[0]: x["report"]
                 for x in gt_items}
     
-    # 匹配预测和真值
+    # Match predictions against ground truth
     gts, recs = {}, {}
     common_keys = sorted(set(gt_map) & set(pred_map))
     
@@ -397,9 +397,9 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
     print(f"  Valid samples: {len(common_keys)}")
     
     if len(common_keys) == 0:
-        print(f"\n❌ 错误: 没有找到有效的样本对！")
-        print(f"   预测文件ID示例: {list(pred_map.keys())[:5]}")
-        print(f"   真值文件ID示例: {list(gt_map.keys())[:5]}")
+        print(f"\nError: no valid sample pairs found!")
+        print(f"   Example prediction IDs: {list(pred_map.keys())[:5]}")
+        print(f"   Example ground-truth IDs: {list(gt_map.keys())[:5]}")
         
         results = {
             '_metadata': {
@@ -411,7 +411,7 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
             json.dump(results, f, indent=2, ensure_ascii=False)
         return
     
-    # 预处理文本
+    # Preprocess the text
     preprocess_start = time.time()
     
     for idx, key in enumerate(tqdm.tqdm(common_keys, desc="Preprocessing")):
@@ -425,14 +425,14 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
     
     preprocess_time = time.time() - preprocess_start
     
-    # 计算带置信区间的分数
+    # Compute the scores with confidence intervals
     print(f"\nComputing NLG metrics...")
     
     scores, timing_info = compute_scores_with_ci(
         gts, recs, n_bootstraps, confidence_level, random_state, n_jobs=n_jobs
     )
     
-    # 添加元数据
+    # Attach metadata
     scores['_metadata'] = {
         'n_samples': len(common_keys),
         'n_bootstraps': n_bootstraps,
@@ -447,26 +447,26 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
         }
     }
     
-    # 保存结果
+    # Write the results
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(scores, f, indent=2, ensure_ascii=False)
     
     total_time = time.time() - script_start
     
     print(f"\n{'='*60}")
-    print(f"✅ NLG metrics with 95% CI → {out_json}")
+    print(f"NLG metrics with 95% CI -> {out_json}")
     print(f"{'='*60}")
     
-    # 打印摘要
-    print(f"\n📊 NLG Metrics Summary:")
+    # Summary
+    print(f"\nNLG Metrics Summary:")
     print("=" * 60)
     for key, value in scores.items():
         if not key.startswith('_'):
             print(f"  {key:12s}: {value}")
     
-    # 打印时间统计
+    # Timing statistics
     print(f"\n{'='*60}")
-    print(f"⏱️  Time Summary (with {actual_jobs} CPU cores)")
+    print(f"Time Summary (with {actual_jobs} CPU cores)")
     print(f"{'='*60}")
     print(f"  Data loading:    {format_time(load_time)}")
     print(f"  Preprocessing:   {format_time(preprocess_time)}")
@@ -485,7 +485,7 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
     print(f"  Script total:    {format_time(total_time)}")
     print(f"{'='*60}")
     
-    # 估算提速比
+    # Rough speedup estimate
     if n_bootstraps >= 100:
         estimated_serial_time = (
             timing_info.get('BLEU', {}).get('bootstrap', 0) * 10 +
@@ -496,7 +496,7 @@ def run(pred_json: Path, gt_json: Path, out_json: Path,
         
         if estimated_serial_time > 0:
             speedup = estimated_serial_time / total_metric_time
-            print(f"\n🚀 Estimated speedup: {speedup:.1f}x")
+            print(f"\nEstimated speedup: {speedup:.1f}x")
             print(f"   (Estimated serial time: {format_time(estimated_serial_time)})")
 
 

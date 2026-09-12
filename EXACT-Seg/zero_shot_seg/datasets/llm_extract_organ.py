@@ -1,4 +1,5 @@
 
+import argparse
 import json
 import os
 from typing import Dict, Any
@@ -200,17 +201,28 @@ Respond with ONLY the organ name (exactly as shown above), nothing else."""
 
 
 def main():
-    # Configuration
-    API_KEY = os.getenv("DMX_API_KEY", "YOUR_API_KEY_HERE")
-    BASE_URL = "https://www.dmxapi.cn/v1"
-    MODEL_NAME = "gpt-3.5-turbo"
-    INPUT_FILE = "/path/to/%%%/ReXGroundingCT/test.json"
-    OUTPUT_FILE = "/path/to/%%%/ReXGroundingCT/output_with_organs.json"
+    parser = argparse.ArgumentParser(
+        description="Tag each ReXGroundingCT finding with the organ it belongs to, "
+                    "using an LLM over the free-text descriptions.")
+    parser.add_argument("--input", required=True,
+                        help="ReXGroundingCT annotation JSON, e.g. test.json")
+    parser.add_argument("--output", required=True,
+                        help="Destination JSON, with an organ field added per finding")
+    parser.add_argument("--model", default="gpt-3.5-turbo",
+                        help="Chat-completions model name")
+    parser.add_argument("--base-url", default="https://www.dmxapi.cn/v1",
+                        help="OpenAI-compatible API endpoint")
+    args = parser.parse_args()
 
-    classifier = OrganClassifier(api_key=API_KEY, base_url=BASE_URL, model_name=MODEL_NAME)
-    classifier.process_json_file(INPUT_FILE, OUTPUT_FILE)
+    api_key = os.getenv("DMX_API_KEY")
+    if not api_key:
+        raise SystemExit("Set DMX_API_KEY to an API key for --base-url.")
 
-    with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+    classifier = OrganClassifier(api_key=api_key, base_url=args.base_url,
+                                 model_name=args.model)
+    classifier.process_json_file(args.input, args.output)
+
+    with open(args.output, "r", encoding="utf-8") as f:
         result = json.load(f)
         if isinstance(result, list) and len(result) > 0:
             print("\nExample output (first sample):")

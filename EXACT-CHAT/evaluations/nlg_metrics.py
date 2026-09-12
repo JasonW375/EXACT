@@ -20,7 +20,7 @@ from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
 
 # ------------------------------------------------------------------ #
-# Optional METEOR → may fail if Java is missing; handled gracefully
+# Optional METEOR: may fail if Java is missing; handled gracefully
 # ------------------------------------------------------------------ #
 
 # ------------------------------------------------------------------ #
@@ -36,8 +36,8 @@ def compute_scores(gts, res):
     for scorer, names in scorers:
         try:
             score, _ = scorer.compute_score(gts, res, verbose=0)
-        except FileNotFoundError:            # METEOR → java not found
-            print("⚠️  Java not found → skipping METEOR")
+        except FileNotFoundError:            # METEOR: java not found
+            print("Java not found; skipping METEOR")
             continue
         except TypeError:
             score, _ = scorer.compute_score(gts, res)
@@ -81,7 +81,7 @@ def run(pred_json: Path, gt_json: Path, out_json: Path):
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(scores, f, indent=2)
-    print("NLG metrics →", out_json)
+    print("NLG metrics ->", out_json)
 
 # ------------------------------------------------------------------ #
 if __name__ == "__main__":

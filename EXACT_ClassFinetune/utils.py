@@ -231,17 +231,17 @@ def get_scheduler(config, optimizer):
 
 
 def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=None):
-    # 定义九个区域掩码的文件名列表
+    # Filenames of the nine region masks
     region_names = ["lung", "trachea and bronchie", "pleura", "mediastinum", "heart", 
                     "esophagus", "bone", "thyroid", "abdomen"]
 
-    # 创建用于存储 .png 和 .nii.gz 文件的子文件夹
+    # Sub-folders for the .png and .nii.gz outputs
     png_path = os.path.join(save_path, "png_files")
     nii_path = os.path.join(save_path, "nii_files")
     os.makedirs(png_path, exist_ok=True)
     os.makedirs(nii_path, exist_ok=True)
 
-    # 处理输入图像的可视化
+    # Visualise the input image
     if img.dim() == 5:
         img = img.squeeze(0)
     if img.dim() == 4:
@@ -251,15 +251,15 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
     img = img.detach().cpu().numpy()
     img = img / 255. if img.max() > 1.1 else img
 
-    # 处理真实掩码和预测掩码数据
+    # Ground-truth and predicted masks
     msk = msk.squeeze(0)
     msk_pred = msk_pred.squeeze(0)
 
-    # 初始化组合掩码图像和颜色
+    # Combined mask image and its colour table
     combined_msk = np.zeros((msk.shape[2], msk.shape[3], 3), dtype=np.float32)
     combined_msk_pred = np.zeros((msk.shape[2], msk.shape[3], 3), dtype=np.float32)
     colors = list(mcolors.TABLEAU_COLORS.values())[:msk.shape[0]]
-    legend_patches = []  # 存放图例信息
+    legend_patches = []  # legend entries
 
     for organ_idx, region_name in enumerate(region_names):
         organ_msk = msk[organ_idx, depth_idx]
@@ -273,7 +273,7 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
         organ_msk = np.where(organ_msk > 0.5, 1, 0)
         organ_msk_pred = np.where(organ_msk_pred > threshold, 1, 0)
 
-        # 保存每个器官的实际和预测掩码的 .png 文件
+        # Save the per-organ ground-truth and predicted masks as .png
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
         plt.imshow(organ_msk, cmap='gray')
@@ -290,21 +290,21 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
         print(f"[DEBUG] Saved organ {region_name} debug image at: {png_file_path}")
         plt.close()
 
-        # 获取颜色并加入图例
-        color_hex = colors[organ_idx]  # 颜色的十六进制字符串格式
-        color = np.array(mcolors.to_rgb(color_hex))  # 转换为 RGB 数组
+        # Look up the colour and add a legend entry
+        color_hex = colors[organ_idx]  # hex string
+        color = np.array(mcolors.to_rgb(color_hex))  # as an RGB array
         combined_msk += np.stack([organ_msk] * 3, axis=-1) * color
         combined_msk_pred += np.stack([organ_msk_pred] * 3, axis=-1) * color
         legend_patches.append(Patch(facecolor=color_hex, label=region_name))
 
-        # 保存每个器官的预测掩码为 .nii.gz 文件
+        # Save each predicted organ mask as .nii.gz
         organ_pred_binary = np.where(msk_pred[organ_idx] > threshold, 1, 0).astype(np.uint8)
         nii_file_path = os.path.join(nii_path, f"{i}_{region_name}_pred_mask.nii.gz")
         nii_img = nib.Nifti1Image(organ_pred_binary, affine=np.eye(4))
         nib.save(nii_img, nii_file_path)
         print(f"[DEBUG] Saved {region_name} predicted mask as NIfTI file at: {nii_file_path}")
 
-    # 将组合的掩码可视化并保存，包含图例
+    # Render the combined mask with its legend and save it
     combined_msk = np.clip(combined_msk, 0, 1)
     combined_msk_pred = np.clip(combined_msk_pred, 0, 1)
 
@@ -446,9 +446,9 @@ class GT_BceDiceLoss(nn.Module):
 class OrganSegmentationLoss(nn.Module):
     def __init__(self, loss_type='dice', w_seg=1.0):
         """
-        初始化器官分割损失函数类
-        :param loss_type: 'binary' 表示二元交叉熵损失, 'dice' 表示 Dice 损失, 'soft' 表示 Soft Dice 损失
-        :param w_seg: 分割损失的权重
+        Organ segmentation loss.
+        :param loss_type: 'binary' for BCE, 'dice' for Dice loss, 'soft' for soft Dice
+        :param w_seg: weight applied to the segmentation loss
         """
         super(OrganSegmentationLoss, self).__init__()
         self.loss_type = loss_type
@@ -470,8 +470,8 @@ class OrganSegmentationLoss(nn.Module):
     def forward(self, y_pred, y_true):
         segment_loss = 0
         
-        # 对每个通道（每个器官）分别计算损失
-        for i in range(y_true.shape[1]):  # 假设 y_true 和 y_pred 的形状为 (batch_size, 9, D, H, W)
+        # Score each channel (each organ) separately
+        for i in range(y_true.shape[1]):  # y_true / y_pred are (batch_size, 9, D, H, W)
             if self.loss_type == 'binary':
                 organ_loss = F.binary_cross_entropy(y_pred[:, i], y_true[:, i])
             elif self.loss_type == 'dice':
@@ -481,12 +481,12 @@ class OrganSegmentationLoss(nn.Module):
             else:
                 raise ValueError("Unsupported loss_type. Choose either 'binary', 'dice', or 'soft'.")
                 
-            segment_loss += organ_loss  # 累加每个通道的损失
+            segment_loss += organ_loss  # accumulate over channels
 
-        # 取平均以获得总的分割损失
+        # Average to get the overall segmentation loss
         segment_loss /= y_true.shape[1]
         
-        return self.w_seg * segment_loss  # 返回加权分割损失
+        return self.w_seg * segment_loss  # weighted segmentation loss
 
 
 class MyToTensor:
@@ -496,17 +496,14 @@ class MyToTensor:
     def __call__(self, data):
         image, mask = data
 
-        # # 调试信息：打印输入数据的类型和形状
         # print(f"Original image type: {type(image)}, shape: {getattr(image, 'shape', 'N/A')}")
         # print(f"Original mask type: {type(mask)}, shape: {getattr(mask, 'shape', 'N/A')}")
 
-        # # 将输入转换为 PyTorch 张量
         # image = torch.tensor(image)
         # mask = torch.tensor(mask)
-        image = torch.as_tensor(image, dtype=torch.float32)  # 保证类型为 float 张量
-        mask = torch.as_tensor(mask, dtype=torch.float32)    # 同样保证类型
+        image = torch.as_tensor(image, dtype=torch.float32)  # force a float tensor
+        mask = torch.as_tensor(mask, dtype=torch.float32)    # same for the mask
 
-        # # 调试信息：打印转换后的张量的形状
         # print(f"Converted image shape: {image.shape}")
         # print(f"Converted mask shape: {mask.shape}")
 
@@ -523,16 +520,11 @@ class MyToTensor:
 #     def __call__(self, data):
 #         image, mask = data
 
-#         # # 调试信息：打印重采样前的形状
 #         # print("Before resizing:")
 #         # print(f"Image shape: {image.shape}")
 #         # print(f"Mask shape: {mask.shape}")
 
-#         # 使用 TorchIO 对图像和掩码进行 3D 调整
-#         image = self.resize_transform(image)  # 对 image 进行 3D resize
-#         mask = self.resize_transform(mask)    # 对 mask 进行 3D resize
 
-#         # # 调试信息：打印重采样后的形状
 #         # print("After resizing:")
 #         # print(f"Image shape: {image.shape}")
 #         # print(f"Mask shape: {mask.shape}")
@@ -548,18 +540,15 @@ class MyToTensor:
 #     def __call__(self, data):
 #         image, mask = data
 
-#         # # 打印重采样前的形状
 #         # print("Before resampling:")
 #         # print(f"Image shape: {image.shape}")
 #         # print(f"Mask shape: {mask.shape}")
 
 #         resample_transform = tio.Resample(self.target_spacing)
 
-#         # 对图像和掩码进行重采样
 #         image = resample_transform(image)
 #         mask = resample_transform(mask)
 
-#         # # 打印重采样后的形状
 #         # print("After resampling:")
 #         # print(f"Image shape: {image.shape}")
 #         # print(f"Mask shape: {mask.shape}")
@@ -580,7 +569,7 @@ class MyRandomFlip:
                 image = np.flip(image, axis=axis)
                 mask = np.flip(mask, axis=axis)
         return image, mask
-        # 在给定的轴上随机翻转 3D 图像
+        # Randomly flip the 3D volume along the given axes
 
 # class MyRandomRotation:
 #     def __init__(self, p=0.5, degree=(-10, 10)):
@@ -591,7 +580,6 @@ class MyRandomFlip:
 #         image, mask = data
 #         if random.random() < self.p:
 #             angle = random.uniform(self.degree[0], self.degree[1])
-#             # 使用 torchio 进行 3D 仿射旋转
 #             rotate_transform = tio.RandomAffine(scales=1, degrees=angle)
 #             image = rotate_transform(image)
 #             mask = rotate_transform(mask)
@@ -635,7 +623,7 @@ class MyNormalize:
     def adaptive_windowing(self,img, min_val=-2000, max_val=1000):
         # print(f"[DEBUG] Input type for adaptive_windowing: {type(img)}")
         # sys.exit()
-        img_filtered = np.array(img)  # 创建一个副本
+        img_filtered = np.array(img)  # work on a copy
         first_min = img_filtered.min()
         img_filtered[img_filtered < first_min + 100] = np.nan
         min_display = np.nanpercentile(img_filtered, 0.5)
@@ -702,12 +690,12 @@ class MyNormalize:
     
 
 
-from thop import profile		 ## 导入thop模块
+from thop import profile
 def cal_params_flops(model, size, logger):
     input = torch.randn(1, 3, size, size).cuda()
     flops, params = profile(model, inputs=(input,))
-    print('flops',flops/1e9)			## 打印计算量
-    print('params',params/1e6)			## 打印参数量
+    print('flops', flops / 1e9)
+    print('params', params / 1e6)
 
     total = sum(p.numel() for p in model.parameters())
     print("Total params: %.2fM" % (total/1e6))

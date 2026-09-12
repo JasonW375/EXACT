@@ -231,17 +231,17 @@ def get_scheduler(config, optimizer):
 
 
 def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=None):
-    # 定义九个区域掩码的文件名列表
+    # File names of the nine region masks.
     region_names = ["lung", "trachea and bronchie", "pleura", "mediastinum", "heart", 
                     "esophagus", "bone", "thyroid", "abdomen"]
 
-    # 创建用于存储 .png 和 .nii.gz 文件的子文件夹
+    # Sub-directories for the .png and .nii.gz outputs.
     png_path = os.path.join(save_path, "png_files")
     nii_path = os.path.join(save_path, "nii_files")
     os.makedirs(png_path, exist_ok=True)
     os.makedirs(nii_path, exist_ok=True)
 
-    # 处理输入图像的可视化
+    # Render the input image.
     if img.dim() == 5:
         img = img.squeeze(0)
     if img.dim() == 4:
@@ -251,15 +251,15 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
     img = img.detach().cpu().numpy()
     img = img / 255. if img.max() > 1.1 else img
 
-    # 处理真实掩码和预测掩码数据
+    # Ground-truth and predicted masks.
     msk = msk.squeeze(0)
     msk_pred = msk_pred.squeeze(0)
 
-    # 初始化组合掩码图像和颜色
+    # Combined mask image and its colours.
     combined_msk = np.zeros((msk.shape[2], msk.shape[3], 3), dtype=np.float32)
     combined_msk_pred = np.zeros((msk.shape[2], msk.shape[3], 3), dtype=np.float32)
     colors = list(mcolors.TABLEAU_COLORS.values())[:msk.shape[0]]
-    legend_patches = []  # 存放图例信息
+    legend_patches = []
 
     for organ_idx, region_name in enumerate(region_names):
         organ_msk = msk[organ_idx, depth_idx]
@@ -273,7 +273,7 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
         organ_msk = np.where(organ_msk > 0.5, 1, 0)
         organ_msk_pred = np.where(organ_msk_pred > threshold, 1, 0)
 
-        # 保存每个器官的实际和预测掩码的 .png 文件
+        # Save the ground-truth and predicted mask of each organ as .png.
         plt.figure(figsize=(12, 6))
         plt.subplot(1, 2, 1)
         plt.imshow(organ_msk, cmap='gray')
@@ -290,21 +290,21 @@ def save_imgs(img, msk, msk_pred, i, save_path, threshold=0.5, test_data_name=No
         print(f"[DEBUG] Saved organ {region_name} debug image at: {png_file_path}")
         plt.close()
 
-        # 获取颜色并加入图例
-        color_hex = colors[organ_idx]  # 颜色的十六进制字符串格式
-        color = np.array(mcolors.to_rgb(color_hex))  # 转换为 RGB 数组
+        # Colour for this organ, and its legend entry.
+        color_hex = colors[organ_idx]
+        color = np.array(mcolors.to_rgb(color_hex))
         combined_msk += np.stack([organ_msk] * 3, axis=-1) * color
         combined_msk_pred += np.stack([organ_msk_pred] * 3, axis=-1) * color
         legend_patches.append(Patch(facecolor=color_hex, label=region_name))
 
-        # 保存每个器官的预测掩码为 .nii.gz 文件
+        # Save the predicted mask of each organ as .nii.gz.
         organ_pred_binary = np.where(msk_pred[organ_idx] > threshold, 1, 0).astype(np.uint8)
         nii_file_path = os.path.join(nii_path, f"{i}_{region_name}_pred_mask.nii.gz")
         nii_img = nib.Nifti1Image(organ_pred_binary, affine=np.eye(4))
         nib.save(nii_img, nii_file_path)
         print(f"[DEBUG] Saved {region_name} predicted mask as NIfTI file at: {nii_file_path}")
 
-    # 将组合的掩码可视化并保存，包含图例
+    # Save the combined overlay, with a legend.
     combined_msk = np.clip(combined_msk, 0, 1)
     combined_msk_pred = np.clip(combined_msk_pred, 0, 1)
 
@@ -446,9 +446,9 @@ class GT_BceDiceLoss(nn.Module):
 class OrganSegmentationLoss(nn.Module):
     def __init__(self, loss_type='dice', w_seg=1.0):
         """
-        初始化器官分割损失函数类
-        :param loss_type: 'binary' 表示二元交叉熵损失, 'dice' 表示 Dice 损失, 'soft' 表示 Soft Dice 损失
-        :param w_seg: 分割损失的权重
+        Organ segmentation loss.
+        :param loss_type: 'binary' for BCE, 'dice' for Dice, 'soft' for soft Dice
+        :param w_seg: weight on the segmentation loss
         """
         super(OrganSegmentationLoss, self).__init__()
         self.loss_type = loss_type
@@ -470,8 +470,8 @@ class OrganSegmentationLoss(nn.Module):
     def forward(self, y_pred, y_true):
         segment_loss = 0
         
-        # 对每个通道（每个器官）分别计算损失
-        for i in range(y_true.shape[1]):  # 假设 y_true 和 y_pred 的形状为 (batch_size, 9, D, H, W)
+        # One channel (one organ) at a time.
+        for i in range(y_true.shape[1]):  # y_true / y_pred are (batch_size, 9, D, H, W)
             if self.loss_type == 'binary':
                 organ_loss = F.binary_cross_entropy(y_pred[:, i], y_true[:, i])
             elif self.loss_type == 'dice':
@@ -481,69 +481,24 @@ class OrganSegmentationLoss(nn.Module):
             else:
                 raise ValueError("Unsupported loss_type. Choose either 'binary', 'dice', or 'soft'.")
                 
-            segment_loss += organ_loss  # 累加每个通道的损失
+            segment_loss += organ_loss
 
-        # 取平均以获得总的分割损失
+        # Average over channels.
         segment_loss /= y_true.shape[1]
         
-        return self.w_seg * segment_loss  # 返回加权分割损失
+        return self.w_seg * segment_loss
 
-
-# class AorticDissectionLoss(nn.Module):
-#     def __init__(self, w_class=None, smooth=1e-6):
-#         """
-#         主动脉夹层分割损失（只计算 TL/FL 两通道的 Dice + BCE）:
-#         输入 y_pred, y_true: (B, 2, D, H, W) 或 (B, 2, H, W, D)
-#         通道: 0=TL, 1=FL
-#         w_class: 长度2的权重列表 [w_TL, w_FL]，默认均为 1.0
-#         """
-#         super(AorticDissectionLoss, self).__init__()
-#         self.smooth = smooth
-#         if w_class is None:
-#             self.w_class = [1.0, 1.0]
-#         else:
-#             assert len(w_class) == 2, "w_class length must be 2 (TL, FL)"
-#             self.w_class = w_class
-
-#     def dice_loss(self, y_pred, y_true):
-#         # y_pred,y_true: (B, D, H, W) 或 (B, H, W, D); 聚合除 batch 外所有维度
-#         y_pred = y_pred.float()
-#         y_true = y_true.float()
-#         spatial_dims = list(range(1, y_pred.ndim))
-#         intersection = torch.sum(y_pred * y_true, dim=spatial_dims)
-#         union = torch.sum(y_pred, dim=spatial_dims) + torch.sum(y_true, dim=spatial_dims)
-#         dice = (2. * intersection + self.smooth) / (union + self.smooth)
-#         return 1.0 - dice.mean()
-
-#     def forward(self, y_pred, y_true):
-#         # y_pred: logits (B,2,...)  y_true: (B,2,...)
-#         assert y_pred.shape[1] == 2 and y_true.shape[1] == 2, "输入必须含2个通道"
-#         y_pred_prob = torch.sigmoid(y_pred)
-
-#         total_loss = 0.0
-#         for i in range(2):
-#             prob_i = y_pred_prob[:, i]
-#             true_i = y_true[:, i].float()
-#             dice_l = self.dice_loss(prob_i, true_i)
-#             bce_l = F.binary_cross_entropy_with_logits(y_pred[:, i], true_i)
-#             term_loss = dice_l + bce_l
-#             total_loss += self.w_class[i] * term_loss
-
-#         # 对两通道取加权平均（避免权重规模影响量纲）
-#         total_loss = total_loss / (self.w_class[0] + self.w_class[1])
-#         return total_loss
 
 
 
 class AorticDissectionLoss(nn.Module):
     def __init__(self, loss_type='mix', w_aorta=0.0, w_class=None, smooth=1e-6):
-        """
-        两通道版本主动脉夹层分割损失:
-        输入 y_pred, y_true: (B, 2, D, H, W) 或 (B, 2, H, W, D)
-        通道: 0=TL, 1=FL
-        loss_type: 'dice' 或 'mix' (dice + BCE)
-        w_class: 长度2的权重列表 [w_TL, w_FL]
-        w_aorta: 主动脉整体定位 dice 损失权重
+        """Two-channel aortic dissection segmentation loss.
+
+        y_pred, y_true: (B, 2, D, H, W) or (B, 2, H, W, D), channel 0=TL, 1=FL.
+        loss_type: 'dice', or 'mix' for dice + BCE.
+        w_class: per-channel weights [w_TL, w_FL].
+        w_aorta: weight of the whole-aorta localisation dice term.
         """
         super(AorticDissectionLoss, self).__init__()
         self.loss_type = loss_type
@@ -556,7 +511,7 @@ class AorticDissectionLoss(nn.Module):
             self.w_class = w_class
 
     def dice_loss(self, y_pred, y_true):
-        # y_pred,y_true: (B, D, H, W) 或 (B, H, W, D); 聚合除 batch 外所有维度
+        # (B, D, H, W) or (B, H, W, D); reduced over every axis but the batch.
         y_pred = y_pred.float()
         y_true = y_true.float()
         spatial_dims = list(range(1, y_pred.ndim))
@@ -568,7 +523,7 @@ class AorticDissectionLoss(nn.Module):
     def forward(self, y_pred, y_true):
         # y_pred: logits (B,2,...)  y_true: (B,2,...)
         
-        assert y_pred.shape[1] == 2 and y_true.shape[1] == 2, "输入必须含2个通道"
+        assert y_pred.shape[1] == 2 and y_true.shape[1] == 2, "expected 2 channels"
         y_pred_prob = torch.sigmoid(y_pred)
 
         total_loss = 0.0
@@ -597,14 +552,15 @@ class AbnormalSegmentationLoss(nn.Module):
                  w_seg: float = 1.0,
                  tversky_alpha: float = 0.3,
                  tversky_beta: float = 0.7,
-                 focal_alpha: float = 0.9,      # 正类权重（小目标增益）
-                 focal_gamma: float = 2.0,      # 聚焦难样本
+                 focal_alpha: float = 0.9,      # positive-class weight
+                 focal_gamma: float = 2.0,      # focus on hard samples
                  weight_tversky: float = 0.7,
                  weight_focal: float = 0.3,
                  smooth: float = 1e-6):
-        """
-        组合损失: L = weight_tversky * Tversky(α,β) + weight_focal * Focal(α_pos, γ)
-        输入预测需已 Sigmoid (概率)；y_true 为 {0,1}.
+        """Combined loss.
+
+        L = weight_tversky * Tversky(a, b) + weight_focal * Focal(alpha, gamma)
+        `y_pred` is expected to be already sigmoid-activated; `y_true` is {0, 1}.
         """
         super().__init__()
         self.w_seg = w_seg
@@ -632,14 +588,14 @@ class AbnormalSegmentationLoss(nn.Module):
         denom = tp + self.tversky_alpha * fp + self.tversky_beta * fn + self.smooth
         tversky_index = (tp + self.smooth) / denom
 
-        # 若该通道完全空且预测也空，可视为完美 (tversky_index≈1)
-        # 已被公式自然处理，不额外判断
+        # A channel that is empty in both prediction and label scores
+        # tversky_index ~= 1, so it needs no special case.
         return 1 - tversky_index.mean()
 
     def _focal_loss(self, y_true, y_pred):
-        """
-        概率版二值 Focal Loss
-        Loss = -α (1-p)^γ y log(p) - (1-α) p^γ (1-y) log(1-p)
+        """Binary focal loss over probabilities.
+
+        Loss = -a (1-p)^g y log(p) - (1-a) p^g (1-y) log(1-p)
         """
         eps = 1e-6
         y_true = y_true.float()
@@ -654,7 +610,7 @@ class AbnormalSegmentationLoss(nn.Module):
         """
         y_pred, y_true: [B, C, D, H, W]
         """
-        assert y_pred.shape == y_true.shape, "预测与标签形状不一致"
+        assert y_pred.shape == y_true.shape, "prediction and label shapes differ"
         C = y_true.shape[1]
         total_loss = 0.0
 
@@ -677,75 +633,10 @@ class MyToTensor:
     def __call__(self, data):
         image, mask = data
 
-        # # 调试信息：打印输入数据的类型和形状
-        # print(f"Original image type: {type(image)}, shape: {getattr(image, 'shape', 'N/A')}")
-        # print(f"Original mask type: {type(mask)}, shape: {getattr(mask, 'shape', 'N/A')}")
-
-        # # 将输入转换为 PyTorch 张量
-        # image = torch.tensor(image)
-        # mask = torch.tensor(mask)
-        image = torch.as_tensor(image, dtype=torch.float32)  # 保证类型为 float 张量
-        mask = torch.as_tensor(mask, dtype=torch.float32)    # 同样保证类型
-
-        # # 调试信息：打印转换后的张量的形状
-        # print(f"Converted image shape: {image.shape}")
-        # print(f"Converted mask shape: {mask.shape}")
+        image = torch.as_tensor(image, dtype=torch.float32)
+        mask = torch.as_tensor(mask, dtype=torch.float32)
 
         return image, mask
-
-
-
-
-# class MyResize:
-#     def __init__(self, target_shape=(256, 512, 512)):
-#         self.target_shape = target_shape
-#         self.resize_transform = tio.Resize(self.target_shape)
-
-#     def __call__(self, data):
-#         image, mask = data
-
-#         # # 调试信息：打印重采样前的形状
-#         # print("Before resizing:")
-#         # print(f"Image shape: {image.shape}")
-#         # print(f"Mask shape: {mask.shape}")
-
-#         # 使用 TorchIO 对图像和掩码进行 3D 调整
-#         image = self.resize_transform(image)  # 对 image 进行 3D resize
-#         mask = self.resize_transform(mask)    # 对 mask 进行 3D resize
-
-#         # # 调试信息：打印重采样后的形状
-#         # print("After resizing:")
-#         # print(f"Image shape: {image.shape}")
-#         # print(f"Mask shape: {mask.shape}")
-
-#         return image, mask
-
-
-       
-# class MyResample:
-#     def __init__(self, target_spacing=(1.0, 1.0, 1.0)):
-#         self.target_spacing = target_spacing
-
-#     def __call__(self, data):
-#         image, mask = data
-
-#         # # 打印重采样前的形状
-#         # print("Before resampling:")
-#         # print(f"Image shape: {image.shape}")
-#         # print(f"Mask shape: {mask.shape}")
-
-#         resample_transform = tio.Resample(self.target_spacing)
-
-#         # 对图像和掩码进行重采样
-#         image = resample_transform(image)
-#         mask = resample_transform(mask)
-
-#         # # 打印重采样后的形状
-#         # print("After resampling:")
-#         # print(f"Image shape: {image.shape}")
-#         # print(f"Mask shape: {mask.shape}")
-
-#         return image, mask
 
 
 class MyRandomFlip:
@@ -761,48 +652,6 @@ class MyRandomFlip:
                 image = np.flip(image, axis=axis)
                 mask = np.flip(mask, axis=axis)
         return image, mask
-        # 在给定的轴上随机翻转 3D 图像
-
-# class MyRandomRotation:
-#     def __init__(self, p=0.5, degree=(-10, 10)):
-#         self.p = p
-#         self.degree = degree
-
-#     def __call__(self, data):
-#         image, mask = data
-#         if random.random() < self.p:
-#             angle = random.uniform(self.degree[0], self.degree[1])
-#             # 使用 torchio 进行 3D 仿射旋转
-#             rotate_transform = tio.RandomAffine(scales=1, degrees=angle)
-#             image = rotate_transform(image)
-#             mask = rotate_transform(mask)
-#         return image, mask
-# class myRandomHorizontalFlip:
-#     def __init__(self, p=0.5):
-#         self.p = p
-#     def __call__(self, data):
-#         image, mask = data
-#         if random.random() < self.p: return TF.hflip(image), TF.hflip(mask)
-#         else: return image, mask
-            
-
-# class myRandomVerticalFlip:
-#     def __init__(self, p=0.5):
-#         self.p = p
-#     def __call__(self, data):
-#         image, mask = data
-#         if random.random() < self.p: return TF.vflip(image), TF.vflip(mask)
-#         else: return image, mask
-
-
-# class myRandomRotation:
-#     def __init__(self, p=0.5, degree=[0,360]):
-#         self.angle = random.uniform(degree[0], degree[1])
-#         self.p = p
-#     def __call__(self, data):
-#         image, mask = data
-#         if random.random() < self.p: return TF.rotate(image,self.angle), TF.rotate(mask,self.angle)
-#         else: return image, mask 
 
 
 class MyNormalize:
@@ -816,7 +665,7 @@ class MyNormalize:
     def adaptive_windowing(self,img, min_val=-2000, max_val=1000):
         # print(f"[DEBUG] Input type for adaptive_windowing: {type(img)}")
         # sys.exit()
-        img_filtered = np.array(img)  # 创建一个副本
+        img_filtered = np.array(img)  # work on a copy
         first_min = img_filtered.min()
         img_filtered[img_filtered < first_min + 100] = np.nan
         min_display = np.nanpercentile(img_filtered, 0.5)
@@ -883,12 +732,12 @@ class MyNormalize:
     
 
 
-from thop import profile		 ## 导入thop模块
+from thop import profile
 def cal_params_flops(model, size, logger):
     input = torch.randn(1, 3, size, size).cuda()
     flops, params = profile(model, inputs=(input,))
-    print('flops',flops/1e9)			## 打印计算量
-    print('params',params/1e6)			## 打印参数量
+    print('flops', flops / 1e9)
+    print('params', params / 1e6)
 
     total = sum(p.numel() for p in model.parameters())
     print("Total params: %.2fM" % (total/1e6))

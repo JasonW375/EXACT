@@ -4,65 +4,65 @@ import codecs
 import os
 
 def fix_encoding(file_path, output_path=None):
-    """修复JSON文件的多重编码问题"""
+    """Repair a JSON file that was written with a doubly-encoded string."""
     if output_path is None:
         base, ext = os.path.splitext(file_path)
         output_path = f"{base}_fixed{ext}"
     
     try:
-        # 尝试直接读取文件内容作为文本
+        # Read the file as text first
         with open(file_path, 'r', encoding='utf-8') as f:
             raw_content = f.read()
         
-        # 方法1：尝试直接加载JSON
+        # Strategy 1: parse the JSON as-is
         try:
             data = json.loads(raw_content)
-            print("直接JSON解析成功")
+            print("Parsed directly as JSON")
         except:
-            # 方法2：尝试修复可能的多重编码问题
+            # Strategy 2: undo a possible double encoding
             try:
-                # 将原始字符串解码为Unicode，再作为JSON解析
+                # Decode the raw string to Unicode, then parse it as JSON
                 fixed_content = raw_content.encode('latin1').decode('utf-8')
                 data = json.loads(fixed_content)
-                print("使用latin1->utf-8转换修复成功")
+                print("Repaired via latin1 -> utf-8")
             except:
-                # 方法3：尝试其他编码组合
+                # Strategy 3: other encoding combinations
                 try:
                     fixed_content = codecs.decode(raw_content, 'unicode_escape')
                     data = json.loads(fixed_content)
-                    print("使用unicode_escape解码修复成功")
+                    print("Repaired via unicode_escape")
                 except:
-                    # 方法4：更复杂的修复尝试
+                    # Strategy 4: last-resort attempt
                     try:
                         fixed_content = raw_content.encode('utf-8').decode('unicode_escape')
                         data = json.loads(fixed_content)
-                        print("使用utf-8->unicode_escape修复成功")
+                        print("Repaired via utf-8 -> unicode_escape")
                     except Exception as e:
-                        raise Exception(f"无法解析JSON: {e}")
+                        raise Exception(f"Cannot parse JSON: {e}")
         
-        # 将修复后的数据保存为UTF-8编码的JSON文件
+        # Write the repaired data back as UTF-8 JSON
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
         
-        print(f"文件已修复并保存到: {output_path}")
+        print(f"File repaired and saved to: {output_path}")
         
-        # 打印一个示例条目
+        # Print one example entry
         if isinstance(data, list) and len(data) > 0:
-            print("\n示例输出（第一个条目）:")
+            print("\nExample output (first entry):")
             print(json.dumps(data[0], ensure_ascii=False, indent=4))
         
         return data
     
     except Exception as e:
-        print(f"处理文件时出错: {e}")
+        print(f"Error while processing the file: {e}")
         
-        # 尝试更直接的二进制方式读取和修复
+        # Fall back to reading the file in binary mode
         try:
-            print("尝试二进制方式修复...")
+            print("Trying the binary repair path...")
             with open(file_path, 'rb') as f:
                 content = f.read()
             
-            # 尝试不同的解码方式
+            # Try several decoding combinations
             decode_methods = [
                 ('utf-8', None),
                 ('utf-8', 'unicode_escape'),
@@ -76,32 +76,32 @@ def fix_encoding(file_path, output_path=None):
                     if second_encoding:
                         decoded = decoded.encode('utf-8').decode(second_encoding)
                     
-                    # 尝试解析JSON
+                    # Attempt to parse the JSON
                     data = json.loads(decoded)
                     
-                    # 成功解析，保存结果
+                    # Parsed successfully: save the result
                     with open(output_path, 'w', encoding='utf-8') as f:
                         json.dump(data, f, ensure_ascii=False, indent=4)
                     
-                    print(f"使用 {input_encoding} -> {second_encoding} 修复成功")
-                    print(f"文件已保存到: {output_path}")
+                    print(f"Repaired with {input_encoding} -> {second_encoding}")
+                    print(f"File saved to: {output_path}")
                     
-                    # 打印示例
+                    # Print an example
                     if isinstance(data, list) and len(data) > 0:
-                        print("\n示例输出（第一个条目）:")
+                        print("\nExample output (first entry):")
                         print(json.dumps(data[0], ensure_ascii=False, indent=4))
                     
                     return data
                 except Exception:
                     continue
             
-            print("所有修复方法都失败了")
+            print("All repair strategies failed")
             return None
         except Exception as e:
-            print(f"二进制修复也失败了: {e}")
+            print(f"Binary repair also failed: {e}")
             return None
 
-# 使用该函数修复您的文件
+# Repair the target file
 input_file = '/path/to/CT-CHAT2/VQA_dataset/output_validation_vicuna.json'
 output_file = '/path/to/CT-CHAT2/VQA_dataset/output_validation_vicuna_fixed.json'
 

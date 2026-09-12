@@ -283,7 +283,7 @@ def strip_known_suffixes(filename):
     return name
 
 
-def process_mask_files(input_dir, output_dir):
+def process_mask_files(input_dir, output_dir, name_filter=None):
     """Process all mask files in a directory."""
     import os
     from pathlib import Path
@@ -297,7 +297,8 @@ def process_mask_files(input_dir, output_dir):
         if p.name.lower().endswith(('.mha', '.nii', '.nii.gz'))
     ])
 
-    mask_files = [f for f in mask_files if "valid" in f.name]
+    if name_filter:
+        mask_files = [f for f in mask_files if name_filter in f.name]
     if not mask_files:
         print(f"No mask files found in {input_dir}")
         return
@@ -346,9 +347,19 @@ def process_mask_files(input_dir, output_dir):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Segmentation mask preprocessing")
-    parser.add_argument("--input", type=str, default="/path/to/%%%/segmentations", help="Input mask directory")
-    parser.add_argument("--output", type=str, default="/path/to/%%%/lesion_mask", help="Output directory")
+    parser = argparse.ArgumentParser(
+        description="Merge and resample lesion annotations onto the (64, 128, 128) "
+                    "grid the model predicts on, producing the ground truth that "
+                    "evaluation/calc_dice.py and calc_aupr.py score against.")
+    parser.add_argument("--input", type=str, required=True,
+                        help="Input mask directory, e.g. ReXGroundingCT/segmentations "
+                             "(one {study_id}.nii.gz per study, one channel per finding)")
+    parser.add_argument("--output", type=str, required=True,
+                        help="Output directory for the merged binary masks")
+    parser.add_argument("--name-filter", type=str, default=None,
+                        help="Only process files whose name contains this substring, "
+                             "e.g. 'valid' to restrict to the validation split "
+                             "(default: process every mask in --input)")
 
     args = parser.parse_args()
-    process_mask_files(args.input, args.output)
+    process_mask_files(args.input, args.output, args.name_filter)

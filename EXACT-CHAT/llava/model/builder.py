@@ -60,8 +60,11 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
 
             print('Loading LLaVA from base model...')
             lora_cfg_pretrained.pad_token_id = None
-            # lora_cfg_pretrained.vocab_size = lora_cfg_pretrained.vocab_size - 1 - 4
-            lora_cfg_pretrained.vocab_size = 32000
+            # The checkpoint config records the *final* vocabulary, i.e. the base
+            # vocabulary plus one pad token and the four task tokens added below.
+            # Roll those back so the base weights load at their original size; the
+            # embeddings are grown again right after.
+            lora_cfg_pretrained.vocab_size = lora_cfg_pretrained.vocab_size - 1 - 4
             model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
 
             print(f"Adding pad token as '<pad>'")
@@ -77,15 +80,9 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             tokenizer.add_tokens(TOKEN_FOR_SHORT_ANSWER, special_tokens=True)
             tokenizer.add_tokens(TOKEN_FOR_REPORT_GENERATION, special_tokens=True)
 
-
-
-
-
-
-            token_num, tokem_dim = model.lm_head.out_features, model.lm_head.in_features
-            if model.lm_head.weight.shape[0] != token_num:
-                model.lm_head.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
-                model.model.embed_tokens.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
+            # Grow the embeddings to cover the four task tokens as well, so the
+            # vocabulary matches the one the checkpoint was trained with.
+            model.resize_token_embeddings(len(tokenizer))
 
             print('Loading additional LLaVA weights...')
             if os.path.exists(os.path.join(model_path, 'non_lora_trainables.bin')):
@@ -104,7 +101,6 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             if any(k.startswith('model.model.') for k in non_lora_trainables):
                 non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
 
-            model.resize_token_embeddings(32004)  # 明确设置为检查点大小 
             model.load_state_dict(non_lora_trainables, strict=False)
 
             from peft import PeftModel

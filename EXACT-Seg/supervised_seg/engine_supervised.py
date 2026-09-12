@@ -4,10 +4,9 @@ import torch
 from torch.cuda.amp import autocast as autocast
 from sklearn.metrics import confusion_matrix
 from utils import save_imgs
-import wandb
+import tracking
 import time
 import torch.nn.functional as F
-import swanlab
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.metrics import precision_score, recall_score
 import math
@@ -30,7 +29,6 @@ import matplotlib.pyplot as plt
 import numpy as np  
 import torch  
 from tqdm import tqdm  
-import wandb  
 from sklearn.metrics import roc_curve, auc  
 import matplotlib.pyplot as plt  
 from scipy.ndimage import binary_erosion, distance_transform_edt
@@ -162,14 +160,13 @@ def train_one_epoch(train_loader, model, segmentation_criterion, optimizer, sche
     # Compute epoch-level average metrics.
     avg_loss = np.mean(loss_list)  
 
-    # Prepare wandb logging payload.
+    # Metrics payload for the optional tracker.
     wandb_metrics = {  
         "train/total_loss": avg_loss,  
     }  
 
-    # Log all training metrics.
-    wandb.log(wandb_metrics, step=epoch)  
-    swanlab.log({"train/total_loss": avg_loss}, step=epoch)
+    # Log all training metrics (no-op unless --track asked for a backend).
+    tracking.log(wandb_metrics, step=epoch)
     if scheduler is not None:  
         scheduler.step()  
 
@@ -416,15 +413,12 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, epoch, logger, 
 
     logger.info(log_info)  
 
-    # wandb  
+
     wandb_log_dict = {  
         "Validation Total Loss": avg_loss,  
         "Dice Mean": avg_dice,
     }  
-    swanlab.log({"val/total_loss": avg_loss,
-                "Dice Mean":avg_dice}, step=epoch)
-    # wandb  
-    wandb.log(wandb_log_dict, step=epoch)  
+    tracking.log(wandb_log_dict, step=epoch)
 
     return 1-avg_dice
 

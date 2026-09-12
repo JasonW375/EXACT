@@ -82,14 +82,14 @@ def process_sample_dir(sample_dir: str, out_dir: str, pattern: re.Pattern, allow
             sum_vol = np.zeros_like(arr, dtype=np.float32)
             ref_img = img
         elif sum_vol.shape != arr.shape:
-            print(f"[WARN] 形状不一致，跳过: {fpath} (got {arr.shape}, expect {sum_vol.shape})")
+            print(f"[WARN] shape mismatch, skipping: {fpath} (got {arr.shape}, expected {sum_vol.shape})")
             continue
 
         sum_vol += arr
         count += 1
 
     if count == 0:
-        print(f"[INFO] 样本无可用热图，跳过: {sample_dir}")
+        print(f"[INFO] no matching heatmaps, skipping: {sample_dir}")
         return False
 
     if aggregate == "mean":
@@ -101,7 +101,7 @@ def process_sample_dir(sample_dir: str, out_dir: str, pattern: re.Pattern, allow
     out_path = os.path.join(out_dir, f"{sample_name}_overlaid_heatmap.nii.gz")
     out_img = nib.Nifti1Image(out_vol, ref_img.affine, ref_img.header)
     nib.save(out_img, out_path)
-    print(f"[OK] {sample_name}: 聚合 {count} 个疾病热图 -> {out_path}")
+    print(f"[OK] {sample_name}: aggregated {count} disease heatmaps -> {out_path}")
     return True
 
 
@@ -125,9 +125,9 @@ def main():
         processed |= process_sample_dir(args.input_root, args.output_dir, pattern, allowed_diseases, args.aggregate)
 
     if not processed:
-        print("[DONE] 未生成任何叠加热图，请检查文件命名与匹配模式。")
+        print("[DONE] No overlays were produced - check the file naming against --res / --no-combined.")
     else:
-        print("[DONE] 叠加热图已全部生成。")
+        print("[DONE] All overlays written.")
 
 if __name__ == "__main__":
     main()

@@ -1,12 +1,11 @@
-# /data/birth/lmx/anaconda3/envs/CT2/bin/python /FM_data/bxg/CT_Report/CT_Report15_18abn_2decoder/train_supervised.py
+# Supervised anomaly segmentation fine-tuning (EXACT-Seg).
 import torch  
 import torch.nn as nn  
 from torch.utils.data import DataLoader, Subset, Dataset  
 import timm  
 import h5py  
 from tensorboardX import SummaryWriter  
-from models.vmunet.vmunet import VMUNet  
-from models.vmunet.ymamba import YMamba  
+from models.ymamba.ymamba import YMamba
 from sklearn.model_selection import KFold  
 import numpy as np  
 import torch.nn.functional as F  
@@ -14,20 +13,19 @@ from tqdm import tqdm
 import os  
 import sys  
 import uuid  
-import time  
+import time
 import json
-import wandb  
 from pathlib import Path
 from datetime import datetime
 
 from datasets.dataset import My_datasets_5fold  ,My_datasets_supervised
-from engine_supervised import *  
+from engine_supervised import *
 
-from utils import *  
-from configs.config_setting import setting_config  
-import random  
-import warnings  
-import swanlab
+import tracking
+from utils import *
+from configs.config_setting import setting_config
+import random
+import warnings
 
 warnings.filterwarnings("ignore")
 
@@ -78,7 +76,8 @@ class YMambaSegOnly(nn.Module):
     When freeze_backbone=True, encoder params are frozen (requires_grad=False)
     without no_grad, so graph construction and gradient propagation are preserved.
     """
-    def __init__(self, YMamba: YMamba, freeze_backbone: bool = False):
+    def __init__(self, YMamba: YMamba, freeze_backbone: bool = False,
+                 head_in_channels: int = None):
         super().__init__()
         # Accept either a DataParallel wrapper or a plain model.
         self.backbone = YMamba.module if isinstance(YMamba, nn.DataParallel) else YMamba
@@ -90,14 +89,18 @@ class YMambaSegOnly(nn.Module):
             self._set_encoder_requires_grad(False)
    
             
-        # Output head (kept trainable)
+        # Output head (kept trainable). The lesion head reads either the
+        # 18-channel abnormality branch or the 7-channel organ branch; pass
+        # head_in_channels to match a checkpoint trained the other way.
         ref = next(self.backbone.parameters())
         self.final_conv_segmentation = UnetOutBlock(
             spatial_dims=self.backbone.spatial_dims,
             in_channels=self.backbone.feat_size[0],
             out_channels=1
         ).to(ref.device)
-        self.final_layer=nn.Conv3d(YMamba.num_abnormal_classes,1,kernel_size=1).to(ref.device)
+        self.head_in_channels = (head_in_channels if head_in_channels is not None
+                                 else YMamba.num_abnormal_classes)
+        self.final_layer = nn.Conv3d(self.head_in_channels, 1, kernel_size=1).to(ref.device)
     def _encoder_modules(self):
         mods = []
         for name in ["vit", "encoder1", "encoder2", "encoder3", "encoder4", "encoder5"]:
@@ -126,7 +129,12 @@ class YMambaSegOnly(nn.Module):
         seg_dec1 = bb.seg_decoder2(seg_dec2, enc1)
         seg_out  = bb.seg_decoder1(seg_dec1)
 
-        seg=bb.activation_segmentation(self.final_layer(bb.final_conv_abnormal_high(seg_out)))
+        # Feed the head from whichever branch matches its input width.
+        if self.head_in_channels == self.backbone.num_abnormal_classes:
+            branch = bb.final_conv_abnormal_high(seg_out)
+        else:
+            branch = bb.final_conv_segmentation(seg_out)
+        seg = bb.activation_segmentation(self.final_layer(branch))
         return seg
 
 def main(config,args):
@@ -172,21 +180,25 @@ def main(config,args):
 
 
     print('#----------Preparing dataset----------#')
-    train_dataset = My_datasets_supervised(config.train_data_path, train=True)
+    mask_dir = getattr(config, 'mask_dir', None)
+    train_dataset = My_datasets_supervised(config.train_data_path, train=True,
+                                           mask_dir=mask_dir)
     train_loader = DataLoader(train_dataset,
-                                batch_size=config.batch_size, 
+                                batch_size=config.batch_size,
                                 shuffle=True,
                                 pin_memory=True,
                                 num_workers=config.num_workers)
-    val_dataset = My_datasets_supervised(config.train_data_path, val=True)
+    val_dataset = My_datasets_supervised(config.train_data_path, val=True,
+                                         mask_dir=mask_dir)
     val_loader = DataLoader(val_dataset,
                                 batch_size=1,
                                 shuffle=False,
-                                pin_memory=True, 
+                                pin_memory=True,
                                 num_workers=config.num_workers,
                                 drop_last=True)
-    test_dataset = My_datasets_supervised(config.test_data_path, test=True)  # Load test set.
-    # test_dataset= My_datasets_supervised(config.train_data_path, val=True)  # Load test set.
+    test_dataset = My_datasets_supervised(config.test_data_path, test=True,
+                                          mask_dir=mask_dir,
+                                          test_split=getattr(config, 'test_split', 'heldout'))
     test_loader = DataLoader(test_dataset,
                             batch_size=1,
                             shuffle=False,
@@ -252,23 +264,17 @@ def main(config,args):
     network_name = full_model.module.__class__.__name__ if isinstance(full_model, nn.DataParallel) else full_model.__class__.__name__
     project_name = network_name + '__' + datetime.now().strftime('%A_%d_%B_%Y_%Hh_%Mm_%Ss')
 
-    # Use swanlab.init to set target project, keep experiment name as project_name, and sync with wandb.
-    swanlab.init(
+    # Metric streaming is opt-in; see --track.
+    tracking.init(
+        args.track,
         project="CT_Report",
-        workspace="meixixixi",
-        experiment_name=project_name,  # Keep your original naming.
+        experiment_name=project_name,
         config={
             "epochs": config.epochs,
             "batch_size": config.batch_size,
             "learning_rate": config.lr
         },
-        sync_wandb=True
-    )
-
-    # Keep your original wandb naming and project behavior.
-    wandb.init(
-        project=project_name,
-        config={"epochs": config.epochs, "batch_size": config.batch_size, "learning_rate": config.lr}
+        workspace=args.track_workspace,
     )
     print('#----------Prepareing loss, opt, sch and amp----------#')
     # criterion = config.criterion
@@ -293,7 +299,11 @@ def main(config,args):
             # If checkpoint keys do not have "module." but current model is DataParallel, add the prefix.
             state_dict = {f'module.{k}': v for k, v in state_dict.items()}
         
-        model=YMambaSegOnly(full_model)  # Wrap model to output segmentation only.
+        # The released checkpoints come in two head wirings: the lesion head
+        # either reads the 18-channel AAmap branch or the 7-channel organ
+        # branch. Take whichever this checkpoint was trained with.
+        head_in = state_dict['final_layer.weight'].shape[1]
+        model = YMambaSegOnly(full_model, head_in_channels=head_in)
         model.load_state_dict(state_dict)
         model = model.to(device)
         if torch.cuda.device_count() > 1:
@@ -474,7 +484,38 @@ if __name__ == '__main__':
     parser.add_argument("--freeze",type=bool,default=False,help="Whether to freeze encoder weights")
     parser.add_argument("--weight_only",type=bool,default=True,help="Load weights only, without restoring optimizer/scheduler states")
     parser.add_argument("--resume_model",type=str,default="/path/to/pretrained_model.pth",help="Path to pretrained model. Leave empty to skip loading")
+    parser.add_argument("--test-data", type=str, default=None,
+                        help="HDF5 store to evaluate; overrides config.test_data_path")
+    parser.add_argument("--train-data", type=str, default=None,
+                        help="HDF5 store to train on; overrides config.train_data_path")
+    parser.add_argument("--mask-dir", type=str, default=None,
+                        help="Directory of {study_id}.nii.gz lesion masks, used when "
+                             "the store carries no 'mask' dataset of its own (the "
+                             "ReXGroundingCT setup); overrides config.mask_dir")
+    parser.add_argument("--gpu", type=str, default=None,
+                        help="CUDA device index; overrides config.gpu_id")
+    parser.add_argument("--track", type=str, default="none",
+                        choices=["none", "wandb", "swanlab", "both"],
+                        help="Stream metrics to an experiment tracker. Off by "
+                             "default; each backend needs its own credentials.")
+    parser.add_argument("--track-workspace", type=str, default=None,
+                        help="SwanLab workspace to log into (defaults to "
+                             "$SWANLAB_WORKSPACE, then to your personal one)")
 
+    parser.add_argument("--test-split", type=str, default="heldout",
+                choices=["heldout", "all"],
+                help="Which studies --task test scores. heldout (default) "
+                    "excludes the fine-tuning split, matching the reported "
+                    "numbers; all scores every study in the store.")
     args = parser.parse_args()
     config = setting_config
+    if args.test_data:
+        config.test_data_path = args.test_data
+    if args.train_data:
+        config.train_data_path = args.train_data
+    if args.mask_dir:
+        config.mask_dir = args.mask_dir
+    if args.gpu:
+        config.gpu_id = args.gpu
+    config.test_split = args.test_split
     main(config, args)

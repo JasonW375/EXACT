@@ -9,11 +9,20 @@ __pycache__/
 *.pt
 *.bin
 *.safetensors
-checkpoints/
+checkpoints/*
+!checkpoints/README.md
 checkpoints_new/
+
+# Downloaded by EXACT-CHAT/evaluations/download_*.py
+EXACT-CHAT/evaluations/roberta_local/
+EXACT-CHAT/evaluations/models/
 
 # Training data & large outputs
 *.nii.gz
+*.npy
+*.h5
+*.mha
+results/
 wandb/
 swanlog/
 output*/

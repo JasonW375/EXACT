@@ -1,11 +1,11 @@
-# /path/to/lmx/anaconda3/envs/CT2/bin/python /FM_data/bxg/CT_Report/CT_Report9_test/train_mamba.py
+# Zero-shot anomaly localization: train / export AAmaps with the Y-Mamba backbone.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset 
 import timm
 from datasets.dataset import My_datasets
 from tensorboardX import SummaryWriter
-from models.vmunet.ygmamba import YMamba
+from models.ymamba.ymamba import YMamba
 
 from engine import *
 import os
@@ -29,7 +29,7 @@ def main(config):
     print("============================")
     sys.path.append(config.work_dir + '/')
     log_dir = os.path.join(config.work_dir, 'log')
-    checkpoint_dir="/path/to/checkpoint_dir/"
+    checkpoint_dir = os.path.join(config.work_dir, 'checkpoints')
     resume_model = os.path.join(checkpoint_dir, 'best.pth')
     outputs = os.path.join(config.work_dir, 'outputs')
     
@@ -197,10 +197,18 @@ def main(config):
         # For test-only runs, epoch can be set manually.
         epoch = checkpoint['epoch']
       
-        file_path="/path/to/best_thresholds.npy"
-        best_thresholds = np.load(file_path)  
-        # print("best thres",best_thresholds)
-        # assert False
+        # Per-disease operating points fitted on the validation split, written by
+        # val_one_epoch as work_dir/best_thresholds_epoch_{epoch}.npy. Point
+        # config.work_dir at the run that produced the checkpoint to pick them up.
+        file_path = os.path.join(
+            config.work_dir, 'best_thresholds_epoch_%d.npy' % epoch)
+        if os.path.exists(file_path):
+            best_thresholds = np.load(file_path)
+        else:
+            print('No fitted thresholds at %s; falling back to 0.5 for all 18 '
+                  'findings. F1 and accuracy will not match the paper.'
+                  % file_path)
+            best_thresholds = np.array([0.5] * 18)
         test_loss = test_one_epoch(
             test_loader,             # Ensure this is the test DataLoader.
             model,  

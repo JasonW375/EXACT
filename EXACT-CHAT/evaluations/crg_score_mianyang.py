@@ -51,7 +51,7 @@ def main(pred_csv: Path, gt_csv: Path, out_json: Path):
     # Get common columns (excluding any metadata columns)
     LABEL_COLS = sorted(pred_cols & gt_cols)
     
-    print(f"📊 动态检测到 {len(LABEL_COLS)} 个标签列:")
+    print(f"Detected {len(LABEL_COLS)} label columns:")
     for i, col in enumerate(LABEL_COLS, 1):
         print(f"   {i}. {col}")
     
@@ -63,9 +63,9 @@ def main(pred_csv: Path, gt_csv: Path, out_json: Path):
         missing_in_pred = gt_cols - pred_cols
         missing_in_gt = pred_cols - gt_cols
         if missing_in_pred:
-            print(f"⚠️  Warning: Columns in GT but not in prediction: {missing_in_pred}")
+            print(f"Warning: columns present in GT but missing from prediction: {missing_in_pred}")
         if missing_in_gt:
-            print(f"⚠️  Warning: Columns in prediction but not in GT: {missing_in_gt}")
+            print(f"Warning: columns present in prediction but missing from GT: {missing_in_gt}")
     # =========================================
 
     merged = pred.reindex(gt.index).astype(int)
@@ -99,15 +99,15 @@ def main(pred_csv: Path, gt_csv: Path, out_json: Path):
         "CRG":  float(crg),
         "num_labels": len(LABEL_COLS),
         "num_images": int(num_images),
-        "label_columns": LABEL_COLS  # 记录使用了哪些列
+        "label_columns": LABEL_COLS  # record which columns were used
     }
     
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
 
-    print(f"✅ CRG metrics → {out_json}")
-    print(f"📊 CRG Score: {crg:.4f}")
-    print(f"   基于 {len(LABEL_COLS)} 个标签列, {num_images} 个样本")
+    print(f"CRG metrics -> {out_json}")
+    print(f"CRG Score: {crg:.4f}")
+    print(f"   Based on {len(LABEL_COLS)} label columns and {num_images} samples")
 
 
 if __name__ == "__main__":

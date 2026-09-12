@@ -5,41 +5,10 @@ import numpy as np
 import nibabel as nib
 from tqdm import tqdm
 
-# Diseases included in overlay/averaging (kept consistent with overlay_heatmap.py)
-OVERLAY_DISEASES = [
-    "Arterial wall calcification", "Emphysema", "Atelectasis", "Lung nodule",
-    "Lung opacity", "Pulmonary fibrotic sequela", "Pleural effusion",
-    "Mosaic attenuation pattern", "Peribronchial thickening", "Consolidation",
-    "Bronchiectasis", "Interlobular septal thickening",
-]
-OVERLAY_DISEASES_SET = set(OVERLAY_DISEASES)
-
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Read from the pre-overlaid average heatmap directory, threshold the heatmaps, and save segmentation results (overlay step is no longer performed)."
-    )
-    p.add_argument(
-        "--root",
-        default="/path/to/%%%/results/test_results",
-        help="Legacy argument kept for compatibility (not used in this script).",
-    )
-    p.add_argument(
-        "--epoch",
-        type=int,
-        default=10,
-        help="Legacy argument kept for compatibility (not used in this script).",
-    )
-    p.add_argument(
-        "--res",
-        choices=["high-res", "low-res"],
-        default="low-res",
-        help="Legacy argument kept for compatibility (not used in this script).",
-    )
-    p.add_argument(
-        "--no-combined",
-        action="store_true",
-        help="Legacy argument kept for compatibility (not used in this script).",
+        description="Binarize the averaged heatmaps written by overlay_heatmap.py."
     )
     # Thresholding mode: abs = absolute threshold; rel = relative threshold; both = intersection of both
     p.add_argument(
@@ -62,13 +31,13 @@ def parse_args():
     )
     p.add_argument(
         "--in-overlay",
-        default="/path/to/%%%/overlaid_heatmaps_covidfull",
-        help="Input directory of pre-overlaid average heatmaps (reads *_overlaid_heatmap.nii.gz).",
+        required=True,
+        help="Input directory of averaged heatmaps (reads *_overlaid_heatmap.nii.gz).",
     )
     p.add_argument(
         "--out-seg",
-        default="/path/to/%%%/segmentation_results_covidfull",
-        help="Output directory for segmentation results.",
+        required=True,
+        help="Output directory for the binary masks.",
     )
     p.add_argument(
         "--overwrite",

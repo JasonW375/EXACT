@@ -1,7 +1,7 @@
 # confidence_interval.py
 """
-计算分类指标的95%置信区间
-使用Bootstrap重采样方法
+Compute 95% confidence intervals for classification metrics
+using bootstrap resampling.
 """
 
 import numpy as np
@@ -25,17 +25,17 @@ def bootstrap_ci(
     random_state: int = 42
 ) -> Tuple[float, float, float]:
     """
-    使用Bootstrap方法计算指标的置信区间
-    
+    Compute a confidence interval for a metric via the bootstrap.
+
     Args:
-        y_true: 真实标签
-        y_pred: 预测标签（0/1）
-        y_prob: 预测概率（用于AUC等指标）
-        metric_func: 指标计算函数
-        metric_name: 指标名称
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平（默认0.95）
-        random_state: 随机种子
+        y_true: ground-truth labels
+        y_pred: predicted labels (0/1)
+        y_prob: predicted probabilities (used by AUC-style metrics)
+        metric_func: callable that computes the metric
+        metric_name: metric name
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level (default 0.95)
+        random_state: random seed
         
     Returns:
         (point_estimate, ci_lower, ci_upper)
@@ -43,20 +43,20 @@ def bootstrap_ci(
     rng = np.random.RandomState(random_state)
     n_samples = len(y_true)
     
-    # 计算点估计
+    # Point estimate
     if y_prob is not None and metric_name in ['auc', 'auprc']:
         point_estimate = metric_func(y_true, y_prob)
     else:
         point_estimate = metric_func(y_true, y_pred)
     
-    # Bootstrap采样
+    # Bootstrap resampling
     bootstrapped_scores = []
     
     for i in range(n_bootstraps):
-        # 有放回采样
+        # Resample with replacement
         indices = rng.randint(0, n_samples, n_samples)
         
-        # 检查采样是否包含至少两个类别
+        # Require at least two classes in the resample
         if len(np.unique(y_true[indices])) < 2:
             continue
         
@@ -69,7 +69,7 @@ def bootstrap_ci(
         except:
             continue
     
-    # 计算置信区间
+    # Confidence interval
     alpha = (1 - confidence_level) / 2
     ci_lower = np.percentile(bootstrapped_scores, alpha * 100)
     ci_upper = np.percentile(bootstrapped_scores, (1 - alpha) * 100)
@@ -86,32 +86,32 @@ def calculate_all_metrics_with_ci(
     random_state: int = 42
 ) -> Dict[str, Dict[str, float]]:
     """
-    计算所有分类指标及其95%置信区间
+    Compute every classification metric with its 95% confidence interval.
     
     Args:
-        y_true: 真实标签 (n_samples,) 或 (n_samples, n_classes)
-        y_pred: 预测标签 (n_samples,) 或 (n_samples, n_classes)
-        y_prob: 预测概率 (n_samples,) 或 (n_samples, n_classes)
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
+        y_true: ground-truth labels, shape (n_samples,) or (n_samples, n_classes)
+        y_pred: predicted labels, shape (n_samples,) or (n_samples, n_classes)
+        y_prob: predicted probabilities, shape (n_samples,) or (n_samples, n_classes)
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
         
     Returns:
-        字典，包含每个指标的值和置信区间
+        Dict holding the value and confidence interval of each metric
     """
     
-    # 检查是否是多标签情况
+    # Multi-label input?
     if len(y_true.shape) > 1:
-        # 多标签分类
+        # Multi-label classification
         return calculate_multilabel_metrics_with_ci(
             y_true, y_pred, y_prob, 
             n_bootstraps, confidence_level, random_state
         )
     
-    # 单标签分类
+    # Single-label classification
     results = {}
     
-    # 定义要计算的指标
+    # Metrics to compute
     metrics = {
         'accuracy': (accuracy_score, False),
         'precision': (precision_score, False),
@@ -119,12 +119,12 @@ def calculate_all_metrics_with_ci(
         'f1': (f1_score, False),
     }
     
-    # 如果有概率预测，添加AUC和AUPRC
+    # Add AUC and AUPRC when probabilities are available
     if y_prob is not None:
         metrics['auc'] = (roc_auc_score, True)
         metrics['auprc'] = (average_precision_score, True)
     
-    # 计算每个指标
+    # Compute each metric
     for metric_name, (metric_func, use_prob) in metrics.items():
         try:
             if use_prob and y_prob is not None:
@@ -167,22 +167,22 @@ def calculate_multilabel_metrics_with_ci(
     random_state: int = 42
 ) -> Dict[str, Dict[str, float]]:
     """
-    计算多标签分类的指标及置信区间
+    Compute multi-label classification metrics with confidence intervals.
     
     Args:
-        y_true: 真实标签 (n_samples, n_classes)
-        y_pred: 预测标签 (n_samples, n_classes)
-        y_prob: 预测概率 (n_samples, n_classes)
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
+        y_true: ground-truth labels, shape (n_samples, n_classes)
+        y_pred: predicted labels, shape (n_samples, n_classes)
+        y_prob: predicted probabilities, shape (n_samples, n_classes)
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
         
     Returns:
-        字典，包含宏平均和微平均指标及其置信区间
+        Dict holding macro- and micro-averaged metrics with confidence intervals
     """
     results = {}
     
-    # 定义要计算的指标
+    # Metrics to compute
     metrics_config = {
         'macro': {
             'accuracy': (lambda yt, yp: accuracy_score(yt.ravel(), yp.ravel()), False),
@@ -197,7 +197,7 @@ def calculate_multilabel_metrics_with_ci(
         }
     }
     
-    # 如果有概率，添加AUC指标
+    # Add AUC metrics when probabilities are available
     if y_prob is not None:
         metrics_config['macro']['auc_macro'] = (
             lambda yt, yp: roc_auc_score(yt, yp, average='macro'), True
@@ -206,7 +206,7 @@ def calculate_multilabel_metrics_with_ci(
             lambda yt, yp: roc_auc_score(yt, yp, average='micro'), True
         )
     
-    # 计算每个指标组
+    # Compute each metric group
     for group_name, metrics in metrics_config.items():
         for metric_name, (metric_func, use_prob) in metrics.items():
             try:
@@ -251,19 +251,19 @@ def calculate_per_class_metrics_with_ci(
     random_state: int = 42
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
     """
-    计算每个类别的指标及置信区间
+    Compute per-class metrics with confidence intervals.
     
     Args:
-        y_true: 真实标签 (n_samples, n_classes)
-        y_pred: 预测标签 (n_samples, n_classes)
-        y_prob: 预测概率 (n_samples, n_classes)
-        class_names: 类别名称列表
-        n_bootstraps: Bootstrap采样次数
-        confidence_level: 置信水平
-        random_state: 随机种子
+        y_true: ground-truth labels, shape (n_samples, n_classes)
+        y_pred: predicted labels, shape (n_samples, n_classes)
+        y_prob: predicted probabilities, shape (n_samples, n_classes)
+        class_names: list of class names
+        n_bootstraps: number of bootstrap resamples
+        confidence_level: confidence level
+        random_state: random seed
         
     Returns:
-        字典，包含每个类别每个指标的值和置信区间
+        Dict holding the value and confidence interval of each metric per class
     """
     n_classes = y_true.shape[1]
     
@@ -277,13 +277,13 @@ def calculate_per_class_metrics_with_ci(
         'auc_per_class': {} if y_prob is not None else None
     }
     
-    # 对每个类别分别计算
+    # Compute metrics for each class separately
     for i, class_name in enumerate(class_names):
         y_true_class = y_true[:, i]
         y_pred_class = y_pred[:, i]
         y_prob_class = y_prob[:, i] if y_prob is not None else None
         
-        # 检查是否有正样本
+        # Skip classes without positive samples
         if y_true_class.sum() == 0:
             print(f"Warning: No positive samples for class {class_name}, skipping")
             continue
@@ -339,7 +339,7 @@ def calculate_per_class_metrics_with_ci(
         except:
             pass
         
-        # AUC (如果有概率)
+        # AUC (when probabilities are available)
         if y_prob_class is not None and results['auc_per_class'] is not None:
             try:
                 point, ci_low, ci_high = bootstrap_ci(
@@ -357,7 +357,7 @@ def calculate_per_class_metrics_with_ci(
             except:
                 pass
     
-    # 移除空的字典
+    # Drop the dict if it stayed empty
     if results['auc_per_class'] is not None and not results['auc_per_class']:
         del results['auc_per_class']
     
@@ -365,18 +365,18 @@ def calculate_per_class_metrics_with_ci(
 
 
 if __name__ == "__main__":
-    # 测试代码
+    # Smoke test
     np.random.seed(42)
     n_samples = 1000
     n_classes = 5
     
-    # 生成模拟数据
+    # Synthetic data
     y_true = np.random.randint(0, 2, (n_samples, n_classes))
     y_prob = np.random.rand(n_samples, n_classes)
     y_pred = (y_prob > 0.5).astype(int)
     
-    # 计算指标
-    print("计算多标签分类指标及95% CI...")
+    # Compute metrics
+    print("Computing multi-label metrics with 95% CI...")
     results = calculate_multilabel_metrics_with_ci(y_true, y_pred, y_prob)
     
     for metric_name, values in results.items():

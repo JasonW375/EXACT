@@ -6,18 +6,6 @@ from sklearn.metrics import average_precision_score
 from typing import Tuple, List
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# Default data paths (can be overridden by command-line arguments)
-# gt_dir = "/path/to/high_res_mask"
-gt_dir = "/path/to/visualization_mask"
-# gt_dir = "/path/to/lesion_mask"
-# gt_dir = "/path/to/infection_mask"
-# gt_dir = "/path/to/masks"
-pred_dir = "/path/to/overlaid_heatmaps"
-# pred_dir = "/path/to/heatmap"
-
-# Output path
-out_all = f"{pred_dir}/aupr_scores_all.csv"
-
 
 def _strip_nii_suffix(name: str) -> str:
     base = os.path.basename(name)
@@ -178,13 +166,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compute voxel-level AUPR for all samples"
     )
-    parser.add_argument("--pred_dir", type=str, default=None, help="Prediction directory, overrides default")
-    parser.add_argument("--gt_dir", type=str, default=None, help="GT directory, overrides default")
+    parser.add_argument("--pred_dir", type=str, required=True,
+                        help="Continuous overlays written by overlay_heatmap.py "
+                             "(not the thresholded masks)")
+    parser.add_argument("--gt_dir", type=str, required=True,
+                        help="Ground-truth lesion masks, one {study_id}.nii.gz per "
+                             "study, on the same grid as the predictions "
+                             "(see datasets/resize.py)")
     parser.add_argument("--max_workers", type=int, default=os.cpu_count(), help="Number of parallel workers")
     args = parser.parse_args()
 
-    gt_d = args.gt_dir if args.gt_dir else gt_dir
-    pred_d = args.pred_dir if args.pred_dir else pred_dir
+    gt_d = args.gt_dir
+    pred_d = args.pred_dir
     out_csv = os.path.join(pred_d, "aupr_scores_all_per_sample_mean.csv")
 
     if not os.path.isdir(gt_d):

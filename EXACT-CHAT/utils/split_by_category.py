@@ -2,11 +2,11 @@ import json
 import os
 from collections import defaultdict
 
-# 文件路径
+# File paths
 input_json_path = "/path/to/CT-CHAT2/VQA_dataset/filtered_valid_vqa_with_preds_from_heatmap.json"
 output_dir = "/path/to/CT-CHAT2/VQA_dataset/by_category_from_heatmap"
 
-# 类型标记
+# Question type markers
 type_tokens = {
     'long_answer': '<long_answer>',
     'short_answer': '<short_answer>',
@@ -14,23 +14,23 @@ type_tokens = {
     'report_generation': '<report_generation>'
 }
 
-# 检查输入文件是否存在
+# Check that the input file exists
 if not os.path.exists(input_json_path):
     print(f"Error: Input file not found: {input_json_path}")
     exit(1)
 
-# 创建输出目录
+# Create the output directory
 os.makedirs(output_dir, exist_ok=True)
 print(f"Output directory: {output_dir}")
 
-# 读取JSON文件
+# Read the JSON file
 print("Reading JSON file...")
 with open(input_json_path, 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 print(f"Loaded {len(data)} entries from JSON")
 
-# 按类别分类数据
+# Group the data by category
 categorized_data = {
     'long_answer': [],
     'short_answer': [],
@@ -38,23 +38,23 @@ categorized_data = {
     'report_generation': []
 }
 
-# 统计信息
+# Counters
 stats = defaultdict(int)
 
-# 处理每个条目
+# Process every entry
 for entry in data:
     entry_id = entry.get('id', '')
     
-    # 判断条目属于哪个类别
+    # Decide which category this entry belongs to
     category = None
     
-    # 方法1: 通过id前缀判断
+    # Method 1: infer the category from the id prefix
     for cat_name in type_tokens.keys():
         if entry_id.startswith(cat_name):
             category = cat_name
             break
     
-    # 方法2: 如果id没有匹配，通过conversations中的token判断
+    # Method 2: fall back to the tokens inside the conversations
     if category is None:
         for conv in entry.get('conversations', []):
             if conv.get('from') == 'human':
@@ -66,7 +66,7 @@ for entry in data:
                 if category:
                     break
     
-    # 添加到对应类别
+    # Append to the matching category
     if category:
         categorized_data[category].append(entry)
         stats[category] += 1
@@ -74,7 +74,7 @@ for entry in data:
         stats['unknown'] += 1
         print(f"Warning: Could not determine category for entry: {entry_id}")
 
-# 输出统计信息
+# Report the statistics
 print("\n" + "="*50)
 print("Categorization Statistics:")
 print("="*50)
@@ -85,10 +85,10 @@ print(f"{'unknown':20s}: {stats['unknown']:6d} entries")
 print(f"{'TOTAL':20s}: {sum(stats.values()):6d} entries")
 print("="*50)
 
-# 保存每个类别的JSON文件
+# Write one JSON file per category
 print("\nSaving categorized files...")
 for category, entries in categorized_data.items():
-    if entries:  # 只保存非空的类别
+    if entries:  # skip empty categories
         output_path = os.path.join(output_dir, f"{category}.json")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)

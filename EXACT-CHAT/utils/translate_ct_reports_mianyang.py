@@ -2,6 +2,7 @@ import os
 import json
 import time
 import random
+import argparse
 import pandas as pd
 from openai import OpenAI
 
@@ -12,17 +13,17 @@ class CTReportTranslator:
         self.output_dir = output_dir
         self.batch_size = batch_size
         
-        # 结果文件和断点文件路径
+        # Output and checkpoint files.
         self.output_file = os.path.join(output_dir, "translated_reports.json")
         self.checkpoint_file = os.path.join(output_dir, "checkpoint.json")
         
-        # 初始化 OpenAI 客户端
+        # OpenAI-compatible client.
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url
         )
         
-        # 所有可能的问题模板
+        # Question templates, sampled at random for each report.
         self.question_templates = [
             "Write a radiology report for the following CT scan.",
             "Could you write the radiology report for this chest CT scan?",
@@ -68,7 +69,7 @@ class CTReportTranslator:
             "Provide the radiology report for this CT image."
         ]
         
-        # 系统提示模板 - 翻译任务
+        # System prompt for the translation task.
         self.system_prompt = """You are a professional medical imaging report translator specializing in chest CT reports.
 Your task is to translate Chinese CT reports into English while strictly following the style and structure of the provided English examples.
 
@@ -94,7 +95,7 @@ TRANSLATION PRINCIPLES:
 The goal is to produce an English report that reads as if it were originally written by the same radiologist who wrote the example reports.
 """
         
-        # 10个典型示例 - 从提供的数据中选择
+        # Example reports that define the target style.
         self.example_reports = """## Example English CT Reports
 
 ### Example 1: Normal/Minimal Findings
@@ -159,30 +160,30 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
 """
 
     def load_excel_data(self):
-        """加载Excel文件中的CT报告数据"""
+        """Load the CT reports from the Excel file."""
         try:
             df = pd.read_excel(self.excel_file)
-            print(f"成功加载Excel文件，共 {len(df)} 条记录")
-            print(f"Excel列名: {df.columns.tolist()}")
+            print(f"Loaded Excel file with {len(df)} records")
+            print(f"Excel columns: {df.columns.tolist()}")
             return df
         except Exception as e:
-            print(f"读取Excel文件失败: {e}")
+            print(f"Failed to read the Excel file: {e}")
             return None
     
     def load_disease_predictions(self):
-        """加载疾病预测CSV文件"""
+        """Load the disease-prediction CSV."""
         try:
             df = pd.read_csv(self.disease_csv)
-            print(f"成功加载疾病预测文件，共 {len(df)} 条记录")
-            # 将VolumeName作为索引
+            print(f"Loaded disease predictions with {len(df)} records")
+            # Index by VolumeName.
             df.set_index('VolumeName', inplace=True)
             return df
         except Exception as e:
-            print(f"读取疾病预测CSV文件失败: {e}")
+            print(f"Failed to read the disease-prediction CSV: {e}")
             return None
     
     def format_disease_predictions(self, disease_row):
-        """格式化疾病预测为字符串"""
+        """Format the disease predictions as a string."""
         disease_names = [
             "Medical material", "Arterial wall calcification", "Cardiomegaly", 
             "Pericardial effusion", "Coronary artery wall calcification", "Hiatal hernia",
@@ -200,7 +201,7 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
         return "; ".join(predictions)
     
     def call_gpt(self, input_text, max_retries=8):
-        """调用GPT API进行翻译"""
+        """Translate one report through the chat API."""
         for attempt in range(max_retries):
             try:
                 completion = self.client.chat.completions.create(
@@ -218,49 +219,49 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
-                    print(f"请求失败,{wait_time}秒后重试... 错误: {e}")
+                    print(f"Request failed, retrying in {wait_time}s... error: {e}")
                     time.sleep(wait_time)
                 else:
-                    print(f"达到最大重试次数。跳过。错误: {e}")
+                    print(f"Giving up after {max_retries} attempts. Error: {e}")
                     return None
     
     def load_checkpoint(self):
-        """加载处理进度断点"""
+        """Load the checkpoint file that tracks progress."""
         if os.path.exists(self.checkpoint_file):
             try:
                 with open(self.checkpoint_file, 'r', encoding='utf-8') as file:
                     return json.load(file)
             except Exception as e:
-                print(f"读取断点文件失败: {e}")
+                print(f"Failed to read the checkpoint file: {e}")
         return {"processed_ids": []}
     
     def save_checkpoint(self, processed_ids):
-        """保存处理进度断点"""
+        """Write the checkpoint file."""
         checkpoint = {"processed_ids": list(processed_ids)}
         with open(self.checkpoint_file, 'w', encoding='utf-8') as file:
             json.dump(checkpoint, file, ensure_ascii=False, indent=4)
     
     def load_results(self):
-        """加载已有结果"""
+        """Load the translations produced so far."""
         if os.path.exists(self.output_file):
             try:
                 with open(self.output_file, 'r', encoding='utf-8') as file:
                     return json.load(file)
             except Exception as e:
-                print(f"读取结果文件失败: {e}")
+                print(f"Failed to read the output file: {e}")
         return []
     
     def save_results(self, results):
-        """保存结果到文件"""
+        """Write the translations to disk."""
         with open(self.output_file, 'w', encoding='utf-8') as file:
             json.dump(results, file, ensure_ascii=False, indent=4)
     
     def preview_data(self, excel_df, disease_df, num_samples=3):
-        """预览数据以验证格式（不显示患者个人信息以保护隐私）"""
+        """Preview the inputs before translating (no patient identifiers are shown)."""
         print("\n" + "="*80)
-        print("数据预览 - 前{}个样本".format(num_samples))
+        print("Data preview - first {} samples".format(num_samples))
         print("="*80)
-        print("注意: 为保护患者隐私，不显示姓名、病人ID等个人信息")
+        print("Note: names, patient IDs and other identifiers are hidden for privacy")
         print("="*80)
         
         for idx in range(min(num_samples, len(excel_df))):
@@ -268,83 +269,83 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
             case_id = str(row.get('检查ID', f'case_{idx}'))
             volume_name = f"CT_{case_id}"
             
-            print(f"\n样本 {idx + 1}:")
-            print(f"  检查ID: {case_id}")
-            print(f"  Volume名称: {volume_name}")
-            print(f"  检查提示 (前150字符): {str(row.get('检查提示', ''))[:150]}...")
+            print(f"\nSample {idx + 1}:")
+            print(f"  Exam ID: {case_id}")
+            print(f"  Volume name: {volume_name}")
+            print(f"  Exam prompt (first 150 chars): {str(row.get('检查提示', ''))[:150]}...")
             
             if volume_name in disease_df.index:
                 disease_predictions = self.format_disease_predictions(disease_df.loc[volume_name])
-                print(f"  ✓ 疾病预测: {disease_predictions[:150]}...")
+                print(f"  [OK] Disease predictions: {disease_predictions[:150]}...")
             else:
-                print(f"  ✗ 疾病预测: 未找到 (检查VolumeName是否为 {volume_name})")
+                print(f"  [MISSING] Disease predictions: not found (check whether VolumeName is {volume_name})")
         
         print("\n" + "="*80)
-        print("数据格式确认:")
-        print("1. 检查ID是否正确显示")
-        print("2. Volume名称格式为 CT_检查ID")
-        print("3. 疾病预测是否找到")
+        print("Data format check:")
+        print("1. Whether the exam ID is displayed correctly")
+        print("2. Whether the volume name follows the CT_<exam ID> format")
+        print("3. Whether the disease predictions were found")
         print("="*80)
-        response = input("\n数据格式是否正确？继续处理请输入 'yes': ")
+        response = input("\nProceed with this data? Type 'yes' to continue: ")
         return response.lower() == 'yes'
     
     def process_data(self):
-        """处理数据并翻译CT报告"""
-        # 加载数据
+        """Load the inputs and translate the reports."""
+        # Load the inputs.
         excel_df = self.load_excel_data()
         disease_df = self.load_disease_predictions()
         
         if excel_df is None or disease_df is None:
-            print("数据加载失败，退出")
+            print("Failed to load the inputs, exiting")
             return
         
-        # 预览数据
+        # Preview them.
         if not self.preview_data(excel_df, disease_df, num_samples=3):
-            print("用户取消处理")
+            print("Cancelled by the user")
             return
         
-        # 加载断点和结果
+        # Restore progress from the checkpoint and the existing output.
         checkpoint = self.load_checkpoint()
         processed_ids = set(checkpoint["processed_ids"])
         results = self.load_results()
         
-        print(f"加载了 {len(processed_ids)} 个已处理的样本ID和 {len(results)} 个已生成的结果")
+        print(f"Loaded {len(processed_ids)} processed sample IDs and {len(results)} existing translations")
         
-        # 样本计数器和批处理计数器
+        # Counters for the samples and the save batches.
         total_processed = len(processed_ids)
         batch_counter = 0
         report_counter = len(results)
         
-        # 处理所有样本
+        # Walk over every sample.
         for idx, row in excel_df.iterrows():
-            # 获取病例ID和报告内容（使用实际的Excel列名）
+            # Exam ID and report text (using the real Excel column names).
             case_id = str(row.get('检查ID', f'case_{idx}'))
             chinese_report_full = str(row.get('检查提示', ''))
             
-            # 检查报告内容是否为空或nan
+            # Skip empty reports.
             if pd.isna(chinese_report_full) or chinese_report_full.strip() in ['', 'nan', 'None']:
-                print(f"警告: {case_id} 的检查提示为空，跳过")
+                print(f"Warning: empty exam prompt for {case_id}, skipping")
                 continue
             
-            # 使用完整的检查提示作为报告
-            # 注意：检查提示已经是完整的报告内容，不需要再分离
+            # The exam prompt already is the full report.
+            # No further splitting is needed.
             full_chinese_report = chinese_report_full.strip()
             
-            # 检查是否已处理
+            # Skip anything already processed.
             if case_id in processed_ids:
-                print(f"{case_id} 已处理,跳过")
+                print(f"{case_id} already processed, skipping")
                 continue
             
-            print(f"处理 {case_id}...")
+            print(f"Processing {case_id}...")
             
-            # 构建volume name (假设格式为 CT_病例ID)
+            # Volume name, assumed to follow the CT_<exam ID> format.
             volume_name = f"CT_{case_id}"
             
-            # 获取疾病预测
+            # Disease predictions.
             if volume_name in disease_df.index:
                 disease_predictions = self.format_disease_predictions(disease_df.loc[volume_name])
             else:
-                print(f"警告: 未找到 {volume_name} 的疾病预测，使用全0")
+                print(f"Warning: no disease predictions for {volume_name}, falling back to all zeros")
                 disease_predictions = "; ".join([f"{d}=0" for d in [
                     "Medical material", "Arterial wall calcification", "Cardiomegaly",
                     "Pericardial effusion", "Coronary artery wall calcification", "Hiatal hernia",
@@ -354,7 +355,7 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
                     "Interlobular septal thickening"
                 ]])
             
-            # 构建翻译输入
+            # Build the translation request.
             input_text = f"{self.example_reports}\n\n## Chinese Report to Translate\n\n{full_chinese_report}\n\n"
             input_text += "Please translate the above Chinese CT report into English, following the exact style, structure, and terminology of the example reports provided. "
             input_text += "IMPORTANT: The Chinese report may not have explicit 'Findings:' and 'Impression:' sections. You need to:\n"
@@ -364,20 +365,20 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
             input_text += "4. Use ONLY 'Findings:' and 'Impression:' sections in your output\n"
             input_text += "5. Maintain professional medical language and systematic anatomical descriptions matching the examples."
             
-            # 调用API翻译
+            # Translate.
             english_report = self.call_gpt(input_text)
             
             if english_report is None:
-                print(f"翻译失败，跳过 {case_id}")
+                print(f"Translation failed, skipping {case_id}")
                 continue
             
-            # 随机选择问题模板
+            # Pick a question template at random.
             question_template = random.choice(self.question_templates)
             
-            # 构建问题
+            # Build the question.
             question = f"<image>\n{question_template} Known frontend model predictions (disease-wise): {disease_predictions}.<report_generation>"
             
-            # 构建结果
+            # Build the record.
             result = {
                 "id": f"report_generation_{report_counter}",
                 "image": f"{volume_name}.nii.gz",
@@ -397,43 +398,56 @@ Findings: Trachea, both main bronchi are open. Mediastinal main vascular structu
             results.append(result)
             processed_ids.add(case_id)
             
-            # 更新计数器
+            # Update the counters.
             total_processed += 1
             batch_counter += 1
             report_counter += 1
             
-            # 每处理batch_size个样本保存一次
+            # Flush every batch_size samples.
             if batch_counter >= self.batch_size:
                 self.save_results(results)
                 self.save_checkpoint(processed_ids)
-                print(f"已保存批次,当前已处理 {total_processed} 个样本")
+                print(f"Batch saved, {total_processed} samples processed so far")
                 batch_counter = 0
             
-            # 避免请求过快
+            # Stay well below the API rate limit.
             time.sleep(1)
         
-        # 保存最后一批结果
+        # Flush whatever is left.
         if batch_counter > 0:
             self.save_results(results)
             self.save_checkpoint(processed_ids)
         
-        print(f"处理完成,共处理 {total_processed} 个样本,结果已保存到 {self.output_file}")
+        print(f"Done: {total_processed} samples processed, results written to {self.output_file}")
 
 def main():
-    excel_file = "/path/to/胸部CT/分布外500例.xlsx"
-    disease_csv = "/path/to/CT_Report/CT_Report16_classification/heatmap_ft/mianyang/disease_predictions.csv"
-    output_dir = "/path/to/胸部CT/translated_reports"
-    
-    # 使用DMXAPI的配置
-    api_key = "sk-LZ8gBsGpmHpvomvgcaQ9dz7ZCDiZKIu37FEd28uJdI1ofmgA"
-    base_url = "https://www.dmxapi.cn/v1/"
-    
-    # 确保输出目录存在
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # 创建翻译器实例,指定每50个样本保存一次
-    translator = CTReportTranslator(excel_file, disease_csv, output_dir, api_key, base_url, batch_size=50)
+    parser = argparse.ArgumentParser(
+        description="Translate the MianYang Chinese CT reports into English via an "
+                    "OpenAI-compatible chat API.")
+    parser.add_argument("--excel-file", required=True,
+                        help="Spreadsheet of the raw Chinese reports")
+    parser.add_argument("--disease-csv", required=True,
+                        help="disease_predictions.csv for the same cohort")
+    parser.add_argument("--output-dir", required=True,
+                        help="Directory for the translated reports and checkpoints")
+    parser.add_argument("--base-url", default="https://www.dmxapi.cn/v1/",
+                        help="OpenAI-compatible API endpoint")
+    parser.add_argument("--batch-size", type=int, default=50,
+                        help="Save results every N samples")
+    args = parser.parse_args()
+
+    # The API key is read from the environment: never hard-code a credential in a
+    # file that gets committed.
+    api_key = os.environ.get("TRANSLATE_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "Set TRANSLATE_API_KEY to your API key before running, e.g.\n"
+            "    export TRANSLATE_API_KEY=...")
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    translator = CTReportTranslator(args.excel_file, args.disease_csv, args.output_dir,
+                                    api_key, args.base_url, batch_size=args.batch_size)
     translator.process_data()
 
 if __name__ == "__main__":

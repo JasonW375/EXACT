@@ -1,5 +1,6 @@
 import argparse
 import torch
+import os
 import json
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
@@ -35,7 +36,7 @@ def main(args):
     tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device)
 
     # Open and read the JSON file
-    with open('merged_output_valid.json', 'r') as file:
+    with open(args.eval_json, 'r') as file:
         data_val = json.load(file)
     output_save = []
     for element in tqdm.tqdm(data_val):
@@ -52,7 +53,6 @@ def main(args):
             conv_mode = "mpt"
         else:
             conv_mode = "llama3"
-        conv_mode = "llama3"
         if args.conv_mode is not None and conv_mode != args.conv_mode:
             print('[WARNING] the auto inferred conversation mode is {}, while `--conv-mode` is {}, using {}'.format(conv_mode, args.conv_mode, args.conv_mode))
         else:
@@ -65,7 +65,7 @@ def main(args):
             roles = conv.roles
 
         image_file = element["image"].replace("nii.gz", "npz")
-        image_path = "path_to_valid_encodings/"+image_file
+        image_path = os.path.join(args.encoding_dir, image_file)
         image = np.load(image_path)["arr"]
         image_size = image.size
         # Similar operation in model_worker.py
@@ -110,7 +110,7 @@ def main(args):
 
         output_save.append({"image": image_file, "conversations_out": conversations_save})
     # Save output_save to a JSON file
-    with open("output_validation_llama_70b_nonpretrained.json", "w") as json_file:
+    with open(args.output, "w") as json_file:
         json.dump(output_save, json_file, indent=4)
 
 
@@ -126,5 +126,13 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--eval-json", type=str, required=True,
+                help="Conversation JSON to evaluate: one entry per study, "
+                    "each with an image field and a conversations list.")
+    parser.add_argument("--encoding-dir", type=str, required=True,
+                help="Directory of .npz visual tokens written by "
+                    "llava/serve/encode_script.py.")
+    parser.add_argument("--output", type=str, default="report_predictions.json",
+                help="Where to write the generated reports.")
     args = parser.parse_args()
     main(args)

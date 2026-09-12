@@ -20,7 +20,6 @@ to_get = [
     "tokenizer.json",
     "vocab.json",
     "merges.txt",
-    "special_tokens_map.json",
 ]
 
 saved = []
@@ -44,4 +43,4 @@ for p in saved:
     print(" -", p)
 print("\nLocal RoBERTa model/tokenizer dir:", model_dir)
 print("Next: also run `python download_model.py` to fetch RadBertClassifier.pth,")
-print("then move it into the same roberta_local/ directory.")
+print("then move it in with `mv models/RadBertClassifier.pth roberta_local/`.")

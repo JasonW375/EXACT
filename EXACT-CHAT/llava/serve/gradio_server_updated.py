@@ -343,7 +343,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
 
 title_markdown = ("""
 # CT-CHAT: A vision-language foundational chat model for 3D chest CT volumes
-[📚 [Paper](https://arxiv.org/abs/2403.17834)] [[Code](https://github.com/ibrahimethemhamamci/CT-CLIP)] [[Model & Data](https://huggingface.co/datasets/ibrahimhamamci/CT-RATE)]]
+[[Paper](https://arxiv.org/abs/2403.17834)] [[Code](https://github.com/ibrahimethemhamamci/CT-CLIP)] [[Model & Data](https://huggingface.co/datasets/ibrahimhamamci/CT-RATE)]]
 """)
 
 intended_markdown = ("""
@@ -524,12 +524,8 @@ def build_demo(embed_mode, cur_dir=None, concurrency_count=10):
                     with gr.Column(scale=1, min_width=50):
                         submit_btn = gr.Button(value="Send", variant="primary")
                 with gr.Row(elem_id="buttons") as button_row:
-                    #upvote_btn = gr.Button(value="👍  Upvote", interactive=False)
-                    #downvote_btn = gr.Button(value="👎  Downvote", interactive=False)
-                    #flag_btn = gr.Button(value="⚠️  Flag", interactive=False)
-                    #stop_btn = gr.Button(value="⏹️  Stop Generation", interactive=False)
-                    regenerate_btn = gr.Button(value="🔄  Regenerate", interactive=False)
-                    clear_btn = gr.Button(value="🗑️  Clear", interactive=False)
+                    regenerate_btn = gr.Button(value="Regenerate", interactive=False)
+                    clear_btn = gr.Button(value="Clear", interactive=False)
 
         if not embed_mode:
             gr.Markdown(intended_markdown)
@@ -540,23 +536,6 @@ def build_demo(embed_mode, cur_dir=None, concurrency_count=10):
 
         # Register listeners
         btn_list = [regenerate_btn, clear_btn]
-        """
-        upvote_btn.click(
-            upvote_last_response,
-            [state, model_selector],
-            [textbox, upvote_btn, downvote_btn, flag_btn]
-        )
-        downvote_btn.click(
-            downvote_last_response,
-            [state, model_selector],
-            [textbox, upvote_btn, downvote_btn, flag_btn]
-        )
-        flag_btn.click(
-            flag_last_response,
-            [state, model_selector],
-            [textbox, upvote_btn, downvote_btn, flag_btn]
-        )
-        """
         regenerate_btn.click(
             regenerate,
             [state, image_process_mode],

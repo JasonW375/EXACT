@@ -2,38 +2,33 @@ import os
 import math
 from pathlib import Path
 
-# 数据处理与科学计算
 import numpy as np
 import nibabel as nib
 from scipy.ndimage import binary_erosion, distance_transform_edt
 
-# 深度学习相关
 import torch
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
 
-# 评测指标
 from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, auc
 
-# 绘图与可视化
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import seaborn as sns
 
-# 进度条与实验记录
 from tqdm import tqdm
 import wandb
 
 
 
 def calculate_nsd(pred, target, threshold=0.5, tau=1.0):
-    """
-    计算标准化表面Dice（NSD）
-    :param pred: 预测的分割掩码，形状 [B, C, D, H, W]
-    :param target: 真实的分割掩码，形状 [B, C, D, H, W]
-    :param threshold: 二值化阈值
-    :param tau: 表面距离容忍阈值（单位：像素）
-    :return: NSD值，形状 [B, C]
+    """Normalised surface Dice (NSD).
+
+    :param pred: predicted segmentation mask, shape [B, C, D, H, W]
+    :param target: ground-truth segmentation mask, shape [B, C, D, H, W]
+    :param threshold: binarisation threshold
+    :param tau: surface distance tolerance, in voxels
+    :return: NSD, shape [B, C]
     """
     pred = (pred > threshold).float()
     target = target.float()
@@ -45,7 +40,7 @@ def calculate_nsd(pred, target, threshold=0.5, tau=1.0):
             pred_organ = pred[b, organ_idx].cpu().numpy()
             target_organ = target[b, organ_idx].cpu().numpy()
             
-            # 提取表面点
+            # Extract the surface voxels.
             def get_surface(mask):
                 if not np.any(mask):
                     return np.zeros_like(mask, dtype=bool)
@@ -58,17 +53,16 @@ def calculate_nsd(pred, target, threshold=0.5, tau=1.0):
             surface_pred_coords = np.argwhere(surface_pred)
             surface_target_coords = np.argwhere(surface_target)
             
-            # 处理特殊情况
+            # An empty surface on both sides counts as a perfect match.
             if len(surface_pred_coords) + len(surface_target_coords) == 0:
                 nsd = 1.0
             elif len(surface_pred_coords) == 0 or len(surface_target_coords) == 0:
                 nsd = 0.0
             else:
-                # 计算距离变换
                 dist_map_target = distance_transform_edt(~surface_target)
                 dist_map_pred = distance_transform_edt(~surface_pred)
-                
-                # 计算匹配点数
+
+                # Surface voxels lying within tau of the other surface.
                 pred_dists = dist_map_target[tuple(surface_pred_coords.T)]
                 target_dists = dist_map_pred[tuple(surface_target_coords.T)]
                 tp_a = np.sum(pred_dists <= tau)
@@ -80,52 +74,34 @@ def calculate_nsd(pred, target, threshold=0.5, tau=1.0):
             
     return nsd_per_organ
 
-# 双向权重
-import torch
-import torch.nn.functional as F
-
-
-#一次/根号
-# def weighted_binary_cross_entropy(pred, target, weight_pos, weight_neg):
-#     """
-#     计算加权的二元交叉熵损失。
-#     pred: 预测值，形状为 (B,)
-#     target: 真实标签，形状为 (B,)
-#     weight_pos: 正样本权重
-#     weight_neg: 负样本权重
-#     """
-#     # 计算标准的二元交叉熵损失
-#     loss_pos = weight_pos * target * torch.log(torch.sigmoid(pred) + 1e-6)
-#     loss_neg = weight_neg * (1 - target) * torch.log(1 - torch.sigmoid(pred) + 1e-6)
-#     loss = -(loss_pos + loss_neg)
-#     return loss
-#模型输出已经激活不能再次激活！
 def weighted_binary_cross_entropy(pred, target, weight_pos, weight_neg):
+    """Class-weighted binary cross entropy.
+
+    `pred` is expected to be already activated, so no sigmoid is applied here.
+
+    pred: predictions, shape (B,)
+    target: ground-truth labels, shape (B,)
+    weight_pos: weight on positive samples
+    weight_neg: weight on negative samples
     """
-    计算加权的二元交叉熵损失。
-    pred: 预测值，形状为 (B,)
-    target: 真实标签，形状为 (B,)
-    weight_pos: 正样本权重
-    weight_neg: 负样本权重
-    """
-    # 计算标准的二元交叉熵损失
     loss_pos = weight_pos * target * torch.log(pred + 1e-6)
     loss_neg = weight_neg * (1 - target) * torch.log(1 - pred + 1e-6)
     loss = -(loss_pos + loss_neg)
     return loss
 
 def get_organ_disease_mapping():  
-    """返回疾病到器官的映射关系  
-    现在的器官顺序是:  
-    0: lung  
-    1: trachea and bronchie  
-    2: pleura  
-    3: mediastinum  
-    4: heart  
-    5: esophagus  
+    """Map each disease channel to the organ channel it is scored inside.
+
+    Organ channel order:
+    0: lung
+    1: trachea and bronchie
+    2: pleura
+    3: mediastinum
+    4: heart
+    5: esophagus
     6: global
-    
-    疾病顺序调整为：
+
+    Disease channel order:
     0: "Medical material"
     1: "Arterial wall calcification"
     2: "Cardiomegaly"
@@ -167,58 +143,58 @@ def get_organ_disease_mapping():
     }
 
 def Abnormal_loss_multiscale(seg_pred, abnormal_preds, abnormal_targets, disease_frequencies, k=6, epsilon=1e-6, seg_threshold=0.5):  
-    """  
-    计算多尺度异常检测损失  
-    Args:  
-        seg_pred: 分割预测 (B, 7, D, H, W)  
-        abnormal_preds: 疾病预测列表 [scale1_pred, scale2_pred]，每个元素形状为(B, 18, D, H, W)  
-        abnormal_targets: 疾病标签 (B, 18)  
-        disease_frequencies: 18种疾病的阳性样本频率列表  
-        k: top-k取值  
-        epsilon: 数值稳定性常数  
-        seg_threshold: 分割掩码阈值  
-    """  
+    """Multi-scale abnormality detection loss.
+
+    Args:
+        seg_pred: segmentation prediction (B, 7, D, H, W)
+        abnormal_preds: per-scale disease predictions, each (B, 18, D, H, W)
+        abnormal_targets: disease labels (B, 18)
+        disease_frequencies: positive-sample frequency of each of the 18 diseases
+        k: top-k size at the coarsest scale
+        epsilon: numerical stability constant
+        seg_threshold: threshold used to binarise the segmentation mask
+    """
     B, _, D, H, W = seg_pred.shape  
-    num_diseases = abnormal_preds[0].shape[1]  # 18个疾病通道  
-    num_scales = len(abnormal_preds)  # 尺度数量  
+    num_diseases = abnormal_preds[0].shape[1]
+    num_scales = len(abnormal_preds)
     
-    # 获取疾病到器官的映射  
+    # Map each disease to the organ it is scored inside.
     disease_to_organ = get_organ_disease_mapping()  
     
-    # 对分割预测进行二值化  
+    # Binarise the segmentation prediction.
     seg_mask = (seg_pred > seg_threshold).float()  
     
-    # 为每个尺度准备列表  
+    # One list per scale.
     disease_losses = [[] for _ in range(num_scales)]  
     disease_predictions = [[] for _ in range(num_scales)]  
     
     for scale_idx, abnormal_pred in enumerate(abnormal_preds):  
-        current_k = k * (8 ** scale_idx)  # 每进入下一个尺度，k 乘以 8
-        # print(f"Scale {scale_idx}: current_k = {current_k}")  # 打印当前尺度和对应的 k 值 
-        # 将分割掩码调整到当前尺度  
+        # k grows by a factor of 8 per scale, tracking the voxel count.
+        current_k = k * (8 ** scale_idx)
+        # Bring the segmentation mask to the current scale.
         current_size = abnormal_pred.shape[2:]  
         scaled_seg_mask = F.interpolate(seg_mask, size=current_size, mode='trilinear', align_corners=False)  
         
         for disease_idx in range(num_diseases):  
-            # 获取对应的器官索引  
+            # Organ channel for this disease.
             organ_idx = disease_to_organ[disease_idx]  
             
-            # 将对应器官的分割掩码与疾病预测相乘  
+            # Restrict the disease prediction to that organ.
             organ_mask = scaled_seg_mask[:, organ_idx:organ_idx+1]  
             disease_pred = abnormal_pred[:, disease_idx:disease_idx+1]  
             
             final_pred = organ_mask * disease_pred  
             
-            # 取top-k值的平均  
+            # Average the top-k responses.
             top_k_values, _ = torch.topk(final_pred.view(B, -1), current_k, dim=1)  
             avg_top_k = top_k_values.mean(dim=1)  
             
-            # 使用疾病的频率计算权重  
+            # Weight positives by inverse prevalence.
             freq = disease_frequencies[disease_idx]  
             weight_pos = (1 - freq + epsilon) / (freq + epsilon)  
             weight_neg = 1.0  
             
-            # 计算损失  
+            # Loss for this disease at this scale.
             target = abnormal_targets[:, disease_idx]  
             loss = weighted_binary_cross_entropy(avg_top_k, target, weight_pos, weight_neg)  
             loss = loss.mean()  
@@ -226,7 +202,7 @@ def Abnormal_loss_multiscale(seg_pred, abnormal_preds, abnormal_targets, disease
             disease_losses[scale_idx].append(loss)  
             disease_predictions[scale_idx].append(avg_top_k)  
     
-    # 返回每个尺度的损失和预测  
+    # Per-scale losses and predictions.
     scale_losses = [torch.stack(losses) for losses in disease_losses]  
     scale_predictions = [torch.stack(preds, dim=1) for preds in disease_predictions]  
     
@@ -234,16 +210,15 @@ def Abnormal_loss_multiscale(seg_pred, abnormal_preds, abnormal_targets, disease
 
 
 
-# 添加动态权重计算函数  
 def calculate_dynamic_weight(epoch, initial_weight, total_epochs, decay_rate=9.0):  
-    """  
-    计算动态权重  
-    :param epoch: 当前epoch  
-    :param initial_weight: 初始权重  
-    :param total_epochs: 总epoch数  
-    :param decay_rate: 衰减率  
-    :return: 当前权重  
-    """  
+    """Exponentially decaying loss weight.
+
+    :param epoch: current epoch
+    :param initial_weight: weight at epoch 0
+    :param total_epochs: total number of epochs
+    :param decay_rate: decay rate
+    :return: weight for this epoch
+    """
     k = decay_rate / total_epochs  
     weight =initial_weight * math.exp(-k * epoch) 
     weight = max(weight, 0.5)
@@ -251,24 +226,24 @@ def calculate_dynamic_weight(epoch, initial_weight, total_epochs, decay_rate=9.0
 
 
 def calculate_dice(pred, target, threshold=0.5):
-    # 修改 calculate_dice 函数，确保返回每个批次、每个器官的平均 Dice 分数
+    # Mean Dice per organ, averaged over the batch.
     pred = (pred > threshold).float()
     intersection = (pred * target).sum(dim=(2, 3, 4))
     union = pred.sum(dim=(2, 3, 4)) + target.sum(dim=(2, 3, 4))
-    dice = (2 * intersection + 1e-7) / (union + 1e-7)  # 防止除零
-    # 对批次维度取平均，返回每个器官的平均 Dice 分数
+    dice = (2 * intersection + 1e-7) / (union + 1e-7)  # guard against divide-by-zero
+    # Average over the batch dimension.
     return dice.mean(dim=0)
 
 def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criterion, optimizer, scheduler, epoch, step, logger, config, writer, device):  
     model.train()  
     loss_list = []  
     seg_loss_list = []  
-    # 为每个尺度准备disease loss列表  
-    scale_disease_loss_list = [[[] for _ in range(18)] for _ in range(2)]  # 2个尺度，现在是18个疾病  
-    
-    # 为每个尺度准备organ dice列表  
-    scale_organ_dice_scores = [  
-        [[] for _ in range(7)] for _ in range(2)  # 2个尺度，现在是7个通道（6个器官+1个全局）  
+    # One disease-loss list per scale: 2 scales x 18 diseases.
+    scale_disease_loss_list = [[[] for _ in range(18)] for _ in range(2)]
+
+    # One organ-dice list per scale: 2 scales x 7 channels (6 organs + global).
+    scale_organ_dice_scores = [
+        [[] for _ in range(7)]  for _ in range(2)
     ]  
 
     current_seg_weight = calculate_dynamic_weight(  
@@ -283,10 +258,10 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
 
     train_loader = tqdm(train_loader, desc=f"Epoch {epoch} Training", leave=True)  
     
-    # 更新器官名称，增加全局通道
+    # Organ names, including the global channel.
     organ_names = ["lung", "trachea and bronchie", "pleura", "mediastinum", "heart", "esophagus", "global"]  
     
-    # 更新疾病名称，增加两个新的疾病
+    # Disease names.
     disease_names = [
         "Medical material", "Arterial wall calcification",
         "Cardiomegaly", "Pericardial effusion", "Coronary artery wall calcification",  
@@ -296,9 +271,9 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
         "Bronchiectasis", "Interlobular septal thickening"  
     ]  
 
-    # 更新疾病频率，增加新疾病的频率
+    # Positive-sample frequency of each disease.
     disease_frequencies = [  
-        0.102, 0.2837,  # 新增的两个疾病
+        0.102, 0.2837,
         0.1072, 0.0705, 0.2476, 0.1420, 0.2534, 0.1939, 0.2558, 0.4548,  
         0.3666, 0.2672, 0.1185, 0.0744, 0.1034, 0.1755, 0.0999, 0.0788  
     ]  
@@ -312,22 +287,18 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
         images = images.to(device)  
         seg_targets = seg_targets.to(device)  
         abnormal_targets = abnormal_targets.to(device)  
-        # print(f"seg_targets shape: {seg_targets.shape}")  # 应该是 (B, 7, D, H, W) 
-        # print(f"abnormal_targets: {abnormal_targets.shape}")  # 应该是 (B, 18) 
 
-        seg_pred, abnormal_preds = model(images)  # abnormal_preds是列表[scale1_pred, scale2_pred]  
-        # print(f"seg_pred shape: {seg_pred.shape}")  # 应该是 (B, 7, D, H, W) 
-        # print(f"abnormal_preds: {abnormal_preds.shape}")  # 应该是 (B, 18) 
+        seg_pred, abnormal_preds = model(images)  # abnormal_preds is a per-scale list
 
         seg_loss = segmentation_criterion(seg_pred, seg_targets)  
         scale_losses, scale_predictions = Abnormal_loss_multiscale(seg_pred, abnormal_preds, abnormal_targets, disease_frequencies)  
         
-        # 保存每个尺度每个疾病的loss  
+        # Record the loss of every disease at every scale.
         for scale_idx, scale_loss in enumerate(scale_losses):  
             for disease_idx, disease_loss in enumerate(scale_loss):  
                 scale_disease_loss_list[scale_idx][disease_idx].append(disease_loss.item())  
 
-        # 计算总的异常检测损失（所有尺度的平均）  
+        # Total abnormality loss, averaged over scales.
         abnormal_loss = torch.mean(torch.stack([torch.mean(losses) for losses in scale_losses]))  
         total_loss = current_seg_weight * seg_loss + config.abnormal_loss_weight * abnormal_loss  
 
@@ -337,14 +308,14 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
         loss_list.append(total_loss.item())  
         seg_loss_list.append(seg_loss.item())  
 
-        # 计算每个尺度的Dice分数  
+        # Dice at each scale.
         for scale_idx, abnormal_pred in enumerate(abnormal_preds):  
-            # 将分割预测和目标调整到当前尺度  
+            # Bring prediction and target to the current scale.
             current_size = abnormal_pred.shape[2:]  
             scaled_seg_pred = F.interpolate(seg_pred, size=current_size, mode='trilinear', align_corners=False)  
             scaled_seg_target = F.interpolate(seg_targets, size=current_size, mode='trilinear', align_corners=False)  
             
-            # 计算每个器官的Dice分数（现在包括全局通道）  
+            # Dice per organ, including the global channel.
             for organ_idx, organ_name in enumerate(organ_names):  
                 organ_dice = calculate_dice(  
                     scaled_seg_pred[:, organ_idx:organ_idx+1],  
@@ -358,40 +329,40 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
             'Abn_Loss': f'{abnormal_loss.item():.4f}'  
         })  
 
-    # 计算平均指标  
+    # Epoch averages.
     avg_loss = np.mean(loss_list)  
     avg_seg_loss = np.mean(seg_loss_list)  
     
-    # 计算每个尺度的平均disease losses  
+    # Mean disease loss per scale.
     avg_scale_disease_losses = [  
         [np.mean(losses) for losses in scale_losses]   
         for scale_losses in scale_disease_loss_list  
     ]  
     
-    # 计算每个尺度的平均organ dice  
+    # Mean organ dice per scale.
     avg_scale_organ_dice = [  
         [np.mean(scores) for scores in scale_dices]  
         for scale_dices in scale_organ_dice_scores  
     ]  
 
-    # 使用wandb记录训练指标  
+    # Log training metrics to wandb.
     wandb_metrics = {  
         "train/total_loss": avg_loss,  
         "train/seg_loss": avg_seg_loss,  
         "train/abnormal_loss": np.mean([np.mean(losses) for losses in avg_scale_disease_losses]),  
     }  
 
-    # 记录每个尺度每个器官的Dice分数  
+    # Per-scale, per-organ Dice.
     for scale_idx in range(len(avg_scale_organ_dice)):  
         for organ_idx, organ_name in enumerate(organ_names):  
             wandb_metrics[f"train/scale{scale_idx+1}_dice_{organ_name}"] = avg_scale_organ_dice[scale_idx][organ_idx]  
 
-    # 记录每个尺度每个疾病的loss  
+    # Per-scale, per-disease loss.
     for scale_idx in range(len(avg_scale_disease_losses)):  
         for disease_idx, disease_name in enumerate(disease_names):  
             wandb_metrics[f"train/scale{scale_idx+1}_disease_loss_{disease_name}"] = avg_scale_disease_losses[scale_idx][disease_idx]  
 
-    # 使用wandb记录所有指标  
+    # Send everything to wandb.
     wandb.log(wandb_metrics, step=epoch)  
 
     if scheduler is not None:  
@@ -403,16 +374,16 @@ def train_one_epoch(train_loader, model, segmentation_criterion, abnormal_criter
 
 def upsample_3d(tensor, target_size):  
     """  
-    3D上采样函数，将输入张量调整到目标大小  
-    
-    Args:  
-        tensor (torch.Tensor): 输入张量，形状为 [B, C, D, H, W]  
-        target_size (tuple): 目标大小 (D, H, W)  
-    
-    Returns:  
-        torch.Tensor: 上采样后的张量  
-    """  
-    # 使用三线性插值进行上采样  
+    Upsample a 3D tensor to the target size.
+
+    Args:
+        tensor (torch.Tensor): input, shape [B, C, D, H, W]
+        target_size (tuple): target size (D, H, W)
+
+    Returns:
+        torch.Tensor: the upsampled tensor
+    """
+    # Trilinear interpolation.
     return F.interpolate(  
         tensor,   
         size=target_size,   
@@ -433,16 +404,16 @@ def save_prediction_heatmaps(
     topk=3,   
     abnormal_threshold=None  
 ):  
-    # 解包多尺度预测结果  
+    # Unpack the multi-scale predictions.
     low_res_preds, high_res_preds = predictions  
     
-    # 获取目标大小（高分辨率）  
+    # Target size, i.e. the high-resolution grid.
     _, _, target_depth, target_height, target_width = high_res_preds.shape  
     
-    # 对低分辨率预测进行上采样  
+    # Upsample the low-resolution prediction.
     low_res_upsampled = upsample_3d(low_res_preds, (target_depth, target_height, target_width))  
 
-    # 选择使用高分辨率预测  
+    # Use the high-resolution prediction.
     high_res_pred = high_res_preds[0].cpu().numpy()  # [18, D, H, W]  
     low_res_pred = low_res_upsampled[0].cpu().numpy()  # [18, D, H, W]  
     
@@ -456,22 +427,22 @@ def save_prediction_heatmaps(
     sample_dir = epoch_dir / str(sample_idx)  
     sample_dir.mkdir(parents=True, exist_ok=True)  
     
-    # 3D数据处理：提取分割预测  
+    # Extract the segmentation prediction.
     seg_pred = segmentation_preds[0].cpu().numpy()  # [7, D, H, W]  
     
-    # 3D分割掩码生成  
+    # Build the 3D segmentation mask.
     seg_mask = (seg_pred > seg_threshold).astype(np.float32)  
     target = targets[0].cpu().numpy()  # [18]  
     original_image = images[0, 0].cpu().numpy()  # [D, H, W]  
     
-    # 保存原始图像  
+    # Save the original image.
     affine = np.eye(4)  
     original_nifti = nib.Nifti1Image(original_image, affine)  
     original_nifti.header['descrip'] = f'Original 3D Image, Epoch: {epoch}'  
     original_save_path = sample_dir / f"original_image.nii.gz"  
     nib.save(original_nifti, original_save_path)  
     
-    # 更新疾病名称列表  
+    # Disease names.
     disease_names = [
         "Medical material", "Arterial wall calcification",
         "Cardiomegaly", "Pericardial effusion", "Coronary artery wall calcification",  
@@ -481,7 +452,7 @@ def save_prediction_heatmaps(
         "Bronchiectasis", "Interlobular septal thickening"  
     ]  
     
-    # 更新疾病-器官映射关系  
+    # Disease-to-organ mapping.
     disease_organ_mapping = {  
         "Medical material": ["global"],
         "Arterial wall calcification": ["global"],
@@ -503,7 +474,7 @@ def save_prediction_heatmaps(
         "Interlobular septal thickening": ["lung"]  
     }  
     
-    # 创建预测信息文件  
+    # Write out the prediction summary.
     info_file = sample_dir / "prediction_info.txt"  
     with open(info_file, "w") as f:  
         f.write(f"Epoch: {epoch}\n")  
@@ -511,40 +482,40 @@ def save_prediction_heatmaps(
         f.write(f"Abnormal Detection Parameters: top-{topk}\n")  
         f.write("Disease Predictions:\n")  
         
-        # 存储每个尺度的预测结果  
+        # Predictions for each scale.
         prediction_results = {  
             "High-Res": high_res_pred,  
             "Low-Res": low_res_pred  
         }  
         
-        # 遍历不同分辨率的预测  
+        # Iterate over the resolutions.
         for res_name, pred in prediction_results.items():  
             f.write(f"\n{res_name} Predictions:\n")  
             
-            # 对每种疾病进行处理  
+            # One disease at a time.
             for disease_idx, disease_name in enumerate(disease_names):  
-                # 3D预测图处理  
-                disease_pred = pred[disease_idx]  # 当前疾病的3D预测图 [D, H, W]  
-                disease_label = int(target[disease_idx])  # 当前疾病的真实标签  
+                # 3D prediction map for this disease.
+                disease_pred = pred[disease_idx]  # [D, H, W]
+                disease_label = int(target[disease_idx])
                 
-                # 获取相关器官的分割掩码  
+                # Segmentation mask of the associated organ.
                 related_organs = disease_organ_mapping[disease_name]  
                 combined_mask = np.zeros_like(seg_mask[0])  
                 for organ_name in related_organs:  
                     organ_idx = organ_names.index(organ_name)  
                     combined_mask = np.maximum(combined_mask, seg_mask[organ_idx])  
                 
-                # 计算combined_pred（将预测与器官掩码相乘）  
+                # Restrict the prediction to that organ.
                 combined_pred = disease_pred * combined_mask  
                 
-                # 计算前k个最大值并计算平均值  
+                # Mean of the top-k responses.
                 topk_mean = np.mean(np.sort(combined_pred.flatten())[-topk:])  
                 
-                # 使用对应疾病的最佳阈值  
+                # Best threshold for this disease.
                 current_threshold = abnormal_threshold[disease_idx] if abnormal_threshold is not None else 0.5  
                 pred_abnormal = int(topk_mean > current_threshold)  
                 
-                # 写入预测信息  
+                # Write the prediction line.
                 f.write(f"\n  {disease_name}:\n")  
                 f.write(f"    Ground Truth: {disease_label}\n")  
                 f.write(f"    Prediction: {pred_abnormal}\n")  
@@ -552,10 +523,10 @@ def save_prediction_heatmaps(
                 f.write(f"    Threshold: {current_threshold:.4f}\n")  
                 f.write(f"    Related Organs: {', '.join(related_organs)}\n")  
                 
-                # 创建包含更多信息的文件名  
+                # Encode the key facts in the file name.
                 result_str = f"GT{disease_label}_PD{pred_abnormal}"  
                 
-                # 保存3D预测结果为NIfTI格式   
+                # Save the 3D prediction as NIfTI.
                 nifti_img = nib.Nifti1Image(combined_pred, affine)  
                 nifti_img.header['descrip'] = (f'{res_name} 3D Disease: {disease_name}, Epoch: {epoch}, '  
                                              f'Sample: {sample_idx}, '  
@@ -572,48 +543,49 @@ def save_prediction_heatmaps(
 
 def Abnormal_loss(seg_pred, abnormal_pred, abnormal_targets, disease_frequencies, k=3, epsilon=1e-6, seg_threshold=0.5):  
     """  
-    计算异常检测损失  
-    Args:  
-        seg_pred: 分割预测 (B, 7, D, H, W)  
-        abnormal_pred: 疾病预测 (B, 18, D, H, W)  
-        abnormal_targets: 疾病标签 (B, 18)  
-        disease_frequencies: 16种疾病的阳性样本频率列表  
-        k: top-k取值  
-        epsilon: 数值稳定性常数  
-        seg_threshold: 分割掩码阈值  
+    Abnormality detection loss.
+
+    Args:
+        seg_pred: segmentation prediction (B, 7, D, H, W)
+        abnormal_pred: disease prediction (B, 18, D, H, W)
+        abnormal_targets: disease labels (B, 18)
+        disease_frequencies: positive-sample frequency of each disease
+        k: top-k size
+        epsilon: numerical stability constant
+        seg_threshold: threshold used to binarise the segmentation mask
     """  
     B, _, D, H, W = seg_pred.shape  
-    num_diseases = abnormal_pred.shape[1]  # 18个疾病通道  
+    num_diseases = abnormal_pred.shape[1]
     
-    # 获取疾病到器官的映射  
+    # Map each disease to the organ it is scored inside.
     disease_to_organ = get_organ_disease_mapping()  
     
-    # 对分割预测进行二值化  
+    # Binarise the segmentation prediction.
     seg_mask = (seg_pred > seg_threshold).float()  
     
     disease_losses = []  
     disease_predictions = []  
     
     for disease_idx in range(num_diseases):  
-        # 获取对应的器官索引  
+        # Organ channel for this disease.
         organ_idx = disease_to_organ[disease_idx]  
         
-        # 将对应器官的分割掩码与疾病预测相乘  
+        # Restrict the disease prediction to that organ.
         organ_mask = seg_mask[:, organ_idx:organ_idx+1]  
         disease_pred = abnormal_pred[:, disease_idx:disease_idx+1]  
         
         final_pred = organ_mask * disease_pred  
         
-        # 取top-k值的平均  
+        # Average the top-k responses.
         top_k_values, _ = torch.topk(final_pred.view(B, -1), k, dim=1)  
         avg_top_k = top_k_values.mean(dim=1)  
         
-        # 使用疾病的频率计算权重  
+        # Validation runs unweighted.
         freq = disease_frequencies[disease_idx]  
-        weight_pos = 1.0#val 不加权重
+        weight_pos = 1.0
         weight_neg = 1.0  
         
-        # 计算损失  
+        # Loss for this disease.
         target = abnormal_targets[:, disease_idx]  
         loss = weighted_binary_cross_entropy(avg_top_k, target, weight_pos, weight_neg)  
         loss = loss.mean()  
@@ -627,15 +599,15 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
     model.eval()
     loss_list = []
     seg_loss_list = []
-    # 将 abnormal_loss_list 改为 18 个通道
+    # One entry per disease channel.
     abnormal_loss_list = [[] for _ in range(18)]
     sample_idx = 0
     np.random.seed(42)
     
-    # 阈值搜索相关变量也需要扩展到 18 个
-    threshold_candidates = np.arange(0.1, 0.9, 0.05)  # 从0.1到0.9，步长0.05
-    best_thresholds = np.array([0.5] * 18)  # 初始化每个疾病的最佳阈值
-    best_f1_scores = np.array([-1] * 18)  # 记录每个疾病的最佳F1分数
+    # Threshold search, one threshold per disease.
+    threshold_candidates = np.arange(0.1, 0.9, 0.05)
+    best_thresholds = np.array([0.5] * 18)
+    best_f1_scores = np.array([-1] * 18)
     
     dataset_size = len(valid_loader.dataset)
     selected_indices = set(np.random.choice(dataset_size, min(40, dataset_size), replace=False))
@@ -645,7 +617,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         save_dir = os.path.join(config.work_dir, "validation_results")
         os.makedirs(save_dir, exist_ok=True)
         
-        # 用于存储需要生成热图的数据
+        # Data kept aside for heatmap rendering.
         heatmap_data = []
 
     current_seg_weight = calculate_dynamic_weight(
@@ -662,20 +634,19 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
 
     dice_scores = []
     dice_scores_organ =[]
-    # 扩展到 18 个通道
     tp_sum = np.zeros(18)
     tn_sum = np.zeros(18)
     fp_sum = np.zeros(18)
     fn_sum = np.zeros(18)
 
-    # 修改预测结果的收集列表为 18 个
-    processed_predictions = [[] for _ in range(18)]  # 存储处理后的预测结果
+    # Post-processed predictions, one list per disease.
+    processed_predictions = [[] for _ in range(18)]
     all_targets = [[] for _ in range(18)]
 
-    # 更新器官名称
+    # Organ names.
     organ_names = ["lung", "trachea and bronchie", "pleura", "mediastinum", "heart", "esophagus", "global"]  
 
-    # 更新疾病名称，增加两个新的疾病
+    # Disease names.
     disease_names = [
         "Medical material", "Arterial wall calcification",
         "Cardiomegaly", "Pericardial effusion", "Coronary artery wall calcification",  
@@ -685,9 +656,9 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         "Bronchiectasis", "Interlobular septal thickening"  
     ]
 
-    # 修订后的器官-疾病映射，增加新的疾病映射
-    organ_disease_mapping = {  
-        "global": [0, 1],  # 新增的两个疾病
+    # Organ-to-disease mapping.
+    organ_disease_mapping = {
+        "global": [0, 1],
         "lung": [7, 8, 9, 10, 11, 13, 15,17],  
         "heart": [2, 3, 4],  
         "pleura": [12],  
@@ -696,9 +667,9 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         "trachea and bronchie": [14, 16]  
     }
 
-    # 更新疾病频率，增加新疾病的频率
-    disease_frequencies = [  
-        0.102, 0.2837,  # 新增的两个疾病
+    # Positive-sample frequency of each disease.
+    disease_frequencies = [
+        0.102, 0.2837,
         0.1072, 0.0705, 0.2476, 0.1420, 0.2534, 0.1939, 0.2558, 0.4548,  
         0.3666, 0.2672, 0.1185, 0.0744, 0.1034, 0.1755, 0.0999, 0.0788  
     ]
@@ -711,12 +682,12 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
             images, seg_targets, abnormal_targets = images.to(device), seg_targets.to(device), abnormal_targets.to(device)
 
             seg_pred, abnormal_preds = model(images)
-            abnormal_pred = abnormal_preds[-1]  # 取最后一个尺度的输出 
+            abnormal_pred = abnormal_preds[-1]  # output of the finest scale
             
             seg_loss = segmentation_criterion(seg_pred, seg_targets)
             disease_losses, abnormal_pred_avg = Abnormal_loss(seg_pred, abnormal_pred, abnormal_targets, disease_frequencies)
             
-            # 收集处理后的预测结果和真实标签
+            # Collect post-processed predictions and ground truth.
             abnormal_targets_np = abnormal_targets.cpu().numpy()
             abnormal_pred_avg_np = abnormal_pred_avg.cpu().numpy()
 
@@ -733,7 +704,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
             loss_list.append(total_loss.item())
             seg_loss_list.append(seg_loss.item())
 
-            # 计算Dice分数，注意现在是7个通道
+            # Dice over the 7 channels.
             dice_score_organ = calculate_dice(seg_pred, seg_targets)
             dice_score = dice_score_organ.mean().item()  
             dice_score_organ = dice_score_organ.cpu().numpy()
@@ -741,13 +712,13 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
             dice_scores.append(dice_score)
             dice_scores_organ.append(dice_score_organ)
 
-            # 如果需要保存热图，先存储相关数据
+            # Stash what the heatmaps will need.
             if save_heatmap and iter in selected_indices:
                 for batch_idx in range(images.size(0)):
                     heatmap_data.append({
                         'predictions': [  
-                            abnormal_preds[0][batch_idx:batch_idx+1].cpu(),  # 低分辨率预测  
-                            abnormal_preds[1][batch_idx:batch_idx+1].cpu()   # 高分辨率预测  
+                            abnormal_preds[0][batch_idx:batch_idx+1].cpu(),  # low resolution
+                            abnormal_preds[1][batch_idx:batch_idx+1].cpu()   # high resolution
                         ], 
                         'segmentation_preds': seg_pred[batch_idx:batch_idx+1].cpu(),
                         'targets': abnormal_targets[batch_idx:batch_idx+1].cpu(),
@@ -755,38 +726,37 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
                         'sample_name': sample_names[batch_idx]
                     })
 
-    # 将所有样本的Dice系数转换为NumPy数组  
+    # Stack the per-sample Dice coefficients.
     dice_scores_organ = np.array(dice_scores_organ)  
 
-    # 保存为.npy文件  
+    # Save as .npy.
     np.save('dice_scores.npy', dice_scores_organ) 
 
-    # 将原来的阈值搜索部分替换为以下代码  
+    # Threshold search, one disease at a time.
     logger.info("Finding optimal thresholds for each disease using Youden's index...")  
-    # 修改为18个疾病
     for disease_idx in range(18):  
         y_true = np.array(all_targets[disease_idx]) 
         y_pred_proba = np.array(processed_predictions[disease_idx])  
         
-        # 使用ROC曲线和Youden指数寻找最优阈值  
+        # Pick the threshold maximising the Youden index on the ROC curve.
         fpr, tpr, thresholds = roc_curve(y_true, y_pred_proba)  
         
-        # 计算Youden指数 (J = 敏感性 + 特异性 - 1 = TPR - FPR)  
+        # Youden index J = sensitivity + specificity - 1 = TPR - FPR
         youden_index = tpr - fpr  
         
-        # 找到最大Youden指数对应的阈值  
+        # Threshold at the maximum.
         optimal_idx = np.argmax(youden_index)  
         best_threshold = thresholds[optimal_idx]  
 
-        # 使用最优阈值计算预测结果  
+        # Apply the chosen threshold.
         y_pred = (y_pred_proba > best_threshold).astype(int)  
         
-        # 计算在最优阈值下的性能指标  
+        # Performance at that threshold.
         tp = np.sum((y_true == 1) & (y_pred == 1))  
         fp = np.sum((y_true == 0) & (y_pred == 1))  
         fn = np.sum((y_true == 1) & (y_pred == 0))  
         
-        # 计算F1分数  
+        # F1 score.
         precision = tp / (tp + fp + 1e-8)  
         recall = tp / (tp + fn + 1e-8)  
         f1 = 2 * precision * recall / (precision + recall + 1e-8)  
@@ -794,7 +764,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         best_thresholds[disease_idx] = best_threshold  
         best_f1_scores[disease_idx] = f1  
         
-        # 记录最优阈值和对应的性能指标  
+        # Keep the threshold and its metrics.
         logger.info(f"{disease_names[disease_idx]}: "  
                     f"Best threshold = {best_threshold:.3f}, "  
                     f"F1 = {f1:.4f}, "  
@@ -802,7 +772,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
                     f"Specificity = {1-fpr[optimal_idx]:.4f}, "  
                     f"Youden index = {youden_index[optimal_idx]:.4f}")  
 
-    # 使用最佳阈值重新计算所有指标
+    # Recompute every metric at the chosen thresholds.
     tp_sum = np.zeros(18)
     tn_sum = np.zeros(18)
     fp_sum = np.zeros(18)
@@ -818,17 +788,17 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         fp_sum[disease_idx] = np.sum((y_true == 0) & (y_pred == 1))
         fn_sum[disease_idx] = np.sum((y_true == 1) & (y_pred == 0))
 
-    # 保存最佳阈值
+    # Save the chosen thresholds.
     threshold_save_path = os.path.join(config.work_dir, f'best_thresholds_epoch_{epoch}.npy')
     np.save(threshold_save_path, best_thresholds)
 
-    # 计算每个疾病的指标
+    # Per-disease metrics.
     precision_per_disease = tp_sum / (tp_sum + fp_sum + 1e-8)
     recall_per_disease = tp_sum / (tp_sum + fn_sum + 1e-8)
     accuracy_per_disease = (tp_sum + tn_sum) / (tp_sum + tn_sum + fp_sum + fn_sum + 1e-8)
     f1_per_disease = 2 * precision_per_disease * recall_per_disease / (precision_per_disease + recall_per_disease + 1e-8)  
 
-    # 计算每个疾病的 AUROC
+    # Per-disease AUROC.
     auroc_per_disease = []
     for i in range(18):
         try:
@@ -837,35 +807,35 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
             auroc = 0.0
         auroc_per_disease.append(auroc)
 
-    # 更新器官指标计算逻辑
+    # Organ-level metrics.
     organ_metrics = {}
     for organ, disease_indices in organ_disease_mapping.items():
-        # 收集该器官所有疾病的预测和真实值
+        # Gather predictions and labels for every disease of this organ.
         organ_predictions = []
         organ_targets = []
         for disease_idx in disease_indices:
             organ_predictions.extend(processed_predictions[disease_idx])
             organ_targets.extend(all_targets[disease_idx])
         
-        # 计算该器官的AUROC
+        # Organ AUROC.
         try:
             organ_auroc = roc_auc_score(organ_targets, organ_predictions)
         except ValueError:
             organ_auroc = 0.0
             
-        # 使用最佳阈值计算该器官的其他指标
+        # Remaining organ metrics, at the chosen thresholds.
         organ_tp = sum(tp_sum[i] for i in disease_indices)
         organ_tn = sum(tn_sum[i] for i in disease_indices)
         organ_fp = sum(fp_sum[i] for i in disease_indices)
         organ_fn = sum(fn_sum[i] for i in disease_indices)
         
-        # 计算器官级别的指标
+        # Organ-level summary.
         organ_precision = organ_tp / (organ_tp + organ_fp + 1e-8)
         organ_recall = organ_tp / (organ_tp + organ_fn + 1e-8)
         organ_accuracy = (organ_tp + organ_tn) / (organ_tp + organ_tn + organ_fp + organ_fn + 1e-8)
         organ_f1 = 2 * organ_precision * organ_recall / (organ_precision + organ_recall + 1e-8)  
         
-        # 存储器官指标
+        # Store the organ metrics.
         organ_metrics[organ] = {
             'auroc': organ_auroc,
             'precision': organ_precision,
@@ -874,7 +844,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
             'f1': organ_f1
         }
 
-    # 计算平均指标
+    # Averages.
     avg_precision = np.mean(precision_per_disease)
     avg_recall = np.mean(recall_per_disease)
     avg_accuracy = np.mean(accuracy_per_disease)
@@ -898,11 +868,11 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         plt.close()
         return save_path, cm
 
-    # 创建保存混淆矩阵的目录
+    # Directory for the confusion matrices.
     confusion_matrix_dir = os.path.join(config.work_dir, "validation_confusion_matrices", f"epoch_{epoch}")
     os.makedirs(confusion_matrix_dir, exist_ok=True)
 
-    # 计算并保存每个疾病的混淆矩阵
+    # Per-disease confusion matrices.
     confusion_matrices = {}
     log_info = f"Validation Epoch {epoch} Summary:\n"
     log_info += "Overall Metrics:\n"
@@ -925,7 +895,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         save_path, cm = plot_confusion_matrix(y_true, y_pred, disease, confusion_matrix_dir)  
         confusion_matrices[disease] = cm  
         
-        # 添加到日志信息  
+        # Append to the log.
         log_info += f"\n{disease}:\n"  
         log_info += f"Best Threshold: {best_thresholds[i]:.3f}, "  
         log_info += f"Loss: {np.mean(abnormal_loss_list[i]):.4f}, "  
@@ -938,7 +908,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         log_info += f"TN: {cm[0,0]}, FP: {cm[0,1]}\n"  
         log_info += f"FN: {cm[1,0]}, TP: {cm[1,1]}\n"  
 
-    # 计算并保存每个器官的混淆矩阵  
+    # Per-organ confusion matrices.
     log_info += "\n\nOrgan-level Confusion Matrices:"  
     for organ, disease_indices in organ_disease_mapping.items():  
         organ_predictions = []  
@@ -949,7 +919,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         
         save_path, cm = plot_confusion_matrix(organ_targets, organ_predictions, organ, confusion_matrix_dir)  
         
-        # 添加到日志信息  
+        # Append to the log.
         log_info += f"\n{organ}:\n"  
         log_info += f"AUROC: {organ_metrics[organ]['auroc']:.4f}, "  
         log_info += f"Accuracy: {organ_metrics[organ]['accuracy']:.4f}, "  
@@ -960,13 +930,13 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         log_info += f"TN: {cm[0,0]}, FP: {cm[0,1]}\n"  
         log_info += f"FN: {cm[1,0]}, TP: {cm[1,1]}\n"  
 
-    # 计算总体混淆矩阵统计信息  
+    # Overall confusion-matrix statistics.
     total_tn = sum(cm[0,0] for cm in confusion_matrices.values())  
     total_fp = sum(cm[0,1] for cm in confusion_matrices.values())  
     total_fn = sum(cm[1,0] for cm in confusion_matrices.values())  
     total_tp = sum(cm[1,1] for cm in confusion_matrices.values())  
     
-        # 保存总体混淆矩阵  
+        # Save the overall confusion matrix.
     total_cm = np.array([[total_tn, total_fp], [total_fn, total_tp]])  
     plt.figure(figsize=(10, 8))  
     sns.heatmap(total_cm, annot=True, fmt='d', cmap='Blues')  
@@ -984,7 +954,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
     log_info += f"Total True Positive: {total_tp}\n"  
     log_info += f"Total Samples: {total_tn + total_fp + total_fn + total_tp}\n"  
 
-    # 计算总体指标  
+    # Overall metrics.
     total_accuracy = (total_tp + total_tn) / (total_tp + total_tn + total_fp + total_fn + 1e-8)  
     total_precision = total_tp / (total_tp + total_fp + 1e-8)  
     total_recall = total_tp / (total_tp + total_fn + 1e-8)  
@@ -996,7 +966,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
     log_info += f"Recall: {total_recall:.4f}\n"  
     log_info += f"F1 Score: {total_f1:.4f}\n"  
 
-    # 在找到最佳阈值后，生成和保存热图  
+    # Render the heatmaps now that the thresholds are known.
     if save_heatmap and heatmap_data:  
         if epoch % 5 == 0: 
             logger.info("Generating and saving heatmaps with optimal thresholds...")  
@@ -1019,7 +989,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
     print(log_info)  
     logger.info(log_info)  
 
-    # wandb记录  
+    # wandb logging.
     wandb_log_dict = {  
         "Validation Total Loss": avg_loss,  
         "Validation Seg Loss": avg_seg_loss,  
@@ -1043,7 +1013,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         "Validation Total F1": total_f1  
     }  
 
-    # 添加每个疾病的独立指标、最佳阈值和混淆矩阵  
+    # Per-disease metrics, thresholds and confusion matrices.
     for i, disease in enumerate(disease_names):  
         disease_metrics = {  
             f"Validation_{disease}_Loss": np.mean(abnormal_loss_list[i]),  
@@ -1059,7 +1029,7 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         }  
         wandb_log_dict.update(disease_metrics)  
 
-    # 添加器官指标和混淆矩阵到wandb记录  
+    # Organ metrics and confusion matrices.
     for organ, metrics in organ_metrics.items():  
         organ_wandb_metrics = {  
             f"Validation_{organ}_AUROC": metrics['auroc'],  
@@ -1073,22 +1043,22 @@ def valid_one_epoch(valid_loader, model, segmentation_criterion, abnormal_criter
         }  
         wandb_log_dict.update(organ_wandb_metrics)  
 
-    # 记录到wandb  
+    # Send to wandb.
     wandb.log(wandb_log_dict, step=epoch)  
 
-    return avg_loss, avg_auroc, best_thresholds  # 返回最佳阈值供后续使用
+    return avg_loss, avg_auroc, best_thresholds
 
 
 def calculate_dice_per_organ(pred, target, threshold=0.5):  
     # pred shape: [batch_size, num_classes, D, H, W]  
     pred = (pred > threshold).float()  
-    # 计算每个器官的dice，对每个batch分别计算  
+    # Dice per organ, computed per batch element.
     dice_scores = []  
     batch_size = pred.size(0)  
     num_classes = pred.size(1)  
     
     for i in range(num_classes):  
-        # 取出当前器官的预测和目标  
+        # Prediction and target for this organ.
         pred_organ = pred[:, i:i+1, ...]  # [batch_size, 1, D, H, W]  
         target_organ = target[:, i:i+1, ...]  # [batch_size, 1, D, H, W]  
         
@@ -1096,10 +1066,10 @@ def calculate_dice_per_organ(pred, target, threshold=0.5):
         union = pred_organ.sum(dim=(2, 3, 4)) + target_organ.sum(dim=(2, 3, 4))  # [batch_size, 1]  
         dice = (2 * intersection + 1e-7) / (union + 1e-7)  # [batch_size, 1]  
         
-        # 计算这个器官在整个batch上的平均dice  
+        # Mean dice for this organ over the batch.
         dice_scores.append(dice.mean().item())  
     
-    return dice_scores  # 返回一个长度为num_classes的列表，每个元素是对应器官的平均dice分数  
+    return dice_scores  # one mean dice per organ, length num_classes
 
 def plot_roc_curves(fpr_dict, tpr_dict, roc_auc_dict, organ_names, epoch):  
     plt.figure(figsize=(10, 8))  
@@ -1117,170 +1087,45 @@ def plot_roc_curves(fpr_dict, tpr_dict, roc_auc_dict, organ_names, epoch):
     plt.title(f'ROC Curves for Different Organs')  
     plt.legend(loc="lower right")  
     
-    # 保存图片  
+    # Save the figure.
     save_path = f'roc_curves_epoch_{epoch}.png'  
     plt.savefig(save_path)  
     plt.close()  
     return save_path  
 
-# def visualize_segmentation(image, target, pred, slice_idx, organ_names, epoch, save_dir='visualization'):  
-#     """  
-#     可视化分割结果，显示原始图像、目标分割和预测分割的对比。  
-    
-#     Args:  
-#         image: 形状为[C, D, H, W]的输入图像  
-#         target: 形状为[C, D, H, W]的目标分割  
-#         pred: 形状为[C, D, H, W]的预测分割  
-#         slice_idx: 要显示的切片索引  
-#         organ_names: 器官名称列表  
-#         epoch: 当前训练轮次  
-#         save_dir: 保存可视化结果的目录  
-#     """  
-#     os.makedirs(save_dir, exist_ok=True)  
-#     # 根据维度选择切片  
-#     if image.dim() == 5:  # 处理 5D 张量  
-#         image = image[0, :, :, :, :]  
-#         target = target[0, :, :, :, :]  
-#         pred = pred[0, :, :, :, :]  
-    
-#     # 打印张量形状，帮助调试  
-#     # print(f"Image shape: {image.shape}")  
-#     # print(f"Target shape: {target.shape}")  
-#     # print(f"Pred shape: {pred.shape}")  
-    
-#     # 定义每个器官的颜色  
-#     colors = [  
-#         [0, 0.5, 1],      # 蓝色 - lung  
-#         [1, 0.6, 0],      # 橙色 - trachea_bronchie  
-#         [0, 1, 0.6],      # 青色 - pleura  
-#         [1, 0, 0],        # 红色 - mediastinum  
-#         [0.5, 0, 1],      # 紫色 - heart  
-#         [0.6, 0.3, 0],    # 棕色 - esophagus  
-#         [1, 0.4, 0.7],    # 粉色 - bone  
-#         [0.5, 0.5, 0.5],  # 灰色 - thyroid  
-#         [1, 1, 0],        # 黄色 - abdomen  
-#     ]  
-    
-#     # 创建大图，包含三个子图  
-#     plt.figure(figsize=(20, 7))  
-    
-#     # 1. 显示原始输入图像  
-#     plt.subplot(131)  
-#     img_slice = image[0, slice_idx].cpu().numpy()  
-#     # 归一化到[0,1]范围  
-#     img_slice = (img_slice - img_slice.min()) / (img_slice.max() - img_slice.min() + 1e-8)  
-#     plt.imshow(img_slice, cmap='gray')  
-#     plt.title(f'Input Image\nSlice {slice_idx}', fontsize=12)  
-#     plt.axis('off')  
-    
-#     # 2. 显示真实标签  
-#     plt.subplot(132)  
-#     H, W = target.shape[-2:]  
-#     combined_target = np.zeros((H, W, 3))  
-    
-#     # 创建掩码来跟踪已经填充的区域  
-#     filled_mask = np.zeros((H, W))  
-    
-#     for i in range(len(organ_names)):  
-#         mask = target[i, slice_idx].cpu().numpy()  
-#         # 只在未填充的区域添加新的颜色  
-#         unfilled_mask = mask * (1 - filled_mask)  
-#         for c in range(3):  
-#             combined_target[:, :, c] += unfilled_mask * colors[i][c]  
-#         # 更新已填充区域的掩码  
-#         filled_mask = np.maximum(filled_mask, mask)  
-    
-#     # 确保值在[0,1]范围内  
-#     combined_target = np.clip(combined_target, 0, 1)  
-#     plt.imshow(combined_target)  
-#     plt.title('Ground Truth Segmentation', fontsize=12)  
-    
-#     # 添加图例  
-#     patches = [mpatches.Patch(color=colors[i], label=organ_names[i].replace('_', ' ').title())  
-#               for i in range(len(organ_names))]  
-#     plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)  
-#     plt.axis('off')  
-    
-#     # 3. 显示预测结果  
-#     plt.subplot(133)  
-#     combined_pred = np.zeros((H, W, 3))  
-#     pred_binary = (pred > 0.5).float()  
-    
-#     # 重置填充掩码  
-#     filled_mask = np.zeros((H, W))  
-    
-#     for i in range(len(organ_names)):  
-#         mask = pred_binary[i, slice_idx].cpu().numpy()  
-#         # 只在未填充的区域添加新的颜色  
-#         unfilled_mask = mask * (1 - filled_mask)  
-#         for c in range(3):  
-#             combined_pred[:, :, c] += unfilled_mask * colors[i][c]  
-#         # 更新已填充区域的掩码  
-#         filled_mask = np.maximum(filled_mask, mask)  
-    
-#     # 确保值在[0,1]范围内  
-#     combined_pred = np.clip(combined_pred, 0, 1)  
-#     plt.imshow(combined_pred)  
-#     plt.title('Model Prediction', fontsize=12)  
-    
-#     # 添加图例  
-#     patches = [mpatches.Patch(color=colors[i], label=organ_names[i].replace('_', ' ').title())  
-#               for i in range(len(organ_names))]  
-#     plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)  
-#     plt.axis('off')  
-    
-#     # 调整布局并添加总标题  
-#     plt.suptitle(f'Segmentation Results - Epoch {epoch}', fontsize=14, y=1.02)  
-#     plt.tight_layout()  
-    
-#     # 构建保存路径  
-#     save_path = os.path.join(  
-#         save_dir,   
-#         f'segmentation_vis_epoch_{epoch}_slice_{slice_idx}.png'  
-#     )  
-    
-#     # 保存高质量图像  
-#     plt.savefig(  
-#         save_path,  
-#         bbox_inches='tight',  
-#         dpi=300,  
-#         pad_inches=0.2  
-#     )  
-#     plt.close()  
-    
-#     return save_path
 
 def save_nifti(data, filename):  
-    """保存数据为 NIfTI 格式"""  
-    img = nib.Nifti1Image(data, affine=np.eye(4))  # 使用单位矩阵作为仿射变换  
+    """Save an array as NIfTI."""
+    img = nib.Nifti1Image(data, affine=np.eye(4))  # identity affine
     nib.save(img, filename)  
 
 def visualize_segmentation(image, target, pred, organ_names, epoch, save_dir='visualization'):  
     """  
-    可视化分割结果，显示原始图像、目标分割和预测分割的对比，并保存为 NIfTI 格式。  
-    
-    Args:  
-        image: 形状为[C, D, H, W]的输入图像  
-        target: 形状为[C, D, H, W]的目标分割  
-        pred: 形状为[C, D, H, W]的预测分割  
-        organ_names: 器官名称列表  
-        epoch: 当前训练轮次  
-        save_dir: 保存可视化结果的目录  
+    Render original image, target segmentation and prediction side by side,
+    and save them as NIfTI.
+
+    Args:
+        image: input image, shape [C, D, H, W]
+        target: target segmentation, shape [C, D, H, W]
+        pred: predicted segmentation, shape [C, D, H, W]
+        organ_names: organ names
+        epoch: current epoch
+        save_dir: output directory
     """  
     os.makedirs(save_dir, exist_ok=True)  
     
-    # 根据维度选择切片  
-    if image.dim() == 5:  # 处理 5D 张量  
+    # Pick a slice according to the tensor rank.
+    if image.dim() == 5:  # 5D tensor
         image = image[0, :, :, :, :]  
         target = target[0, :, :, :, :]  
         pred = pred[0, :, :, :, :]  
 
-    image = image[0, :, :, :]  # 选择第一个通道
-    # 保存原始图像  
+    image = image[0, :, :, :]  # first channel
+    # Save the original image.
     image_filename = os.path.join(save_dir, f'original_image_epoch_{epoch}.nii.gz')  
     save_nifti(image.cpu().numpy(), image_filename)  
     
-    # 保存目标分割和预测分割为 NIfTI 格式  
+    # Save target and prediction as NIfTI.
     for i, organ_name in enumerate(organ_names):  
         target_filename = os.path.join(save_dir, f'target_{organ_name}_epoch_{epoch}.nii.gz')  
         pred_filename = os.path.join(save_dir, f'pred_{organ_name}_epoch_{epoch}.nii.gz')  
@@ -1294,7 +1139,7 @@ def visualize_segmentation(image, target, pred, organ_names, epoch, save_dir='vi
 
 
 def plot_confusion_matrix(cm, classes, title):  
-    """绘制混淆矩阵"""  
+    """Plot a confusion matrix."""
     fig, ax = plt.subplots()  
     im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)  
     ax.figure.colorbar(im, ax=ax)  
@@ -1305,7 +1150,7 @@ def plot_confusion_matrix(cm, classes, title):
            ylabel='True label',  
            xlabel='Predicted label')  
     
-    # 在格子中添加数字  
+    # Annotate each cell with its count.
     fmt = 'd'  
     thresh = cm.max() / 2.  
     for i in range(cm.shape[0]):  
@@ -1317,7 +1162,7 @@ def plot_confusion_matrix(cm, classes, title):
     return fig  
 
 def calculate_organ_metrics(predictions, targets):  
-    """计算器官级别的指标"""  
+    """Organ-level metrics."""
     predictions = np.array(predictions)  
     targets = np.array(targets)  
     
@@ -1340,28 +1185,28 @@ def calculate_organ_metrics(predictions, targets):
 
 def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_names, organ_names, best_thresholds):  
     """  
-    创建测试日志信息  
-    
-    参数:  
-    epoch : int  
-        当前轮次  
-    metrics_per_disease : list of dict  
-        每种疾病的指标  
-    organ_metrics : dict  
-        每个器官的指标  
-    disease_names : list  
-        疾病名称列表  
-    organ_names : list  
-        器官名称列表  
-    best_thresholds : numpy array  
-        每种疾病的最佳阈值  
-    
-    返回:  
-    str : 格式化的日志信息  
+    Build the test log message.
+
+    Args:
+    epoch : int
+        current epoch
+    disease_metrics : dict
+        per-disease metrics
+    organ_metrics : dict
+        per-organ metrics
+    disease_names : list
+        disease names
+    organ_names : list
+        organ names
+    best_thresholds : array
+        per-disease best threshold
+
+    Returns:
+    str : the formatted log message
     """  
     import numpy as np  
     
-    # 计算疾病级别的平均指标  
+    # Disease-level averages.
     avg_metrics = {  
         'precision': np.mean([m['precision'] for m in metrics_per_disease]),  
         'recall': np.mean([m['recall'] for m in metrics_per_disease]),  
@@ -1370,7 +1215,7 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
         'auroc': np.mean([m['auroc'] for m in metrics_per_disease])  
     }  
     
-    # 计算器官级别的平均指标  
+    # Organ-level averages.
     avg_organ_metrics = {  
         'precision': np.mean([m['precision'] for m in organ_metrics.values()]),  
         'recall': np.mean([m['recall'] for m in organ_metrics.values()]),  
@@ -1379,11 +1224,11 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
         'auroc': np.mean([m['auroc'] for m in organ_metrics.values()])  
     }  
     
-    # 构建日志信息  
+    # Assemble the message.
     log_info = f"\nTest Epoch {epoch} Summary:\n"  
     log_info += "=" * 50 + "\n"  
     
-    # 总体疾病指标  
+    # Overall disease metrics.
     log_info += "\nOverall Disease Metrics:\n"  
     log_info += "-" * 30 + "\n"  
     log_info += f"Average Precision: {avg_metrics['precision']:.4f}\n"  
@@ -1392,7 +1237,7 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
     log_info += f"Average Accuracy: {avg_metrics['accuracy']:.4f}\n"  
     log_info += f"Average AUROC: {avg_metrics['auroc']:.4f}\n"  
     
-    # 总体器官指标  
+    # Overall organ metrics.
     log_info += "\nOverall Organ Metrics:\n"  
     log_info += "-" * 30 + "\n"  
     log_info += f"Average Precision: {avg_organ_metrics['precision']:.4f}\n"  
@@ -1401,7 +1246,7 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
     log_info += f"Average Accuracy: {avg_organ_metrics['accuracy']:.4f}\n"  
     log_info += f"Average AUROC: {avg_organ_metrics['auroc']:.4f}\n"  
     
-    # 每个疾病的详细指标  
+    # Per-disease detail.
     log_info += "\nPer-Disease Metrics:\n"  
     log_info += "-" * 30 + "\n"  
     for i, disease in enumerate(disease_names):  
@@ -1413,7 +1258,7 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
         log_info += f"Accuracy: {metrics_per_disease[i]['accuracy']:.4f}\n"  
         log_info += f"AUROC: {metrics_per_disease[i]['auroc']:.4f}\n"  
     
-    # 每个器官的详细指标  
+    # Per-organ detail.
     log_info += "\nPer-Organ Metrics:\n"  
     log_info += "-" * 30 + "\n"  
     for organ in organ_names:  
@@ -1431,7 +1276,7 @@ def create_test_log_info(epoch, metrics_per_disease, organ_metrics, disease_name
 
 def plot_confusion_matrix(y_true, y_pred, disease_name, save_dir):  
     """  
-    绘制并保存混淆矩阵  
+    Plot and save a confusion matrix.
     """  
     cm = confusion_matrix(y_true, y_pred)  
     plt.figure(figsize=(8, 6))  
@@ -1462,10 +1307,10 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         save_dir = os.path.join(config.work_dir, "test_results")  
         os.makedirs(save_dir, exist_ok=True)  
         
-        # 用于存储需要生成热图的数据  
+        # Data kept aside for heatmap rendering.
         heatmap_data = []
 
-        vis_samples = []  # 变为列表 
+        vis_samples = []
     
 
 
@@ -1489,8 +1334,8 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     fp_sum = np.zeros(16, dtype=int)  
     fn_sum = np.zeros(16, dtype=int)  
 
-    # 修改预测结果的收集列表  
-    processed_predictions = [[] for _ in range(16)]  # 存储处理后的预测结果  
+    # Post-processed predictions, one list per disease.
+    processed_predictions = [[] for _ in range(16)]
     all_targets = [[] for _ in range(16)]  
 
     organ_names = ["lung", "trachea and bronchie", "pleura", "mediastinum", "heart", "esophagus"]  
@@ -1514,7 +1359,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         "Interlobular septal thickening"     # 15  
     ]  
 
-    # 修订后的器官-疾病映射  
+    # Organ-to-disease mapping.
     organ_disease_mapping = {  
         "lung": [5, 6, 7, 8, 9, 11, 13, 15],  # Emphysema, Atelectasis, Lung nodule, Lung opacity, Pulmonary fibrotic sequela, Mosaic attenuation pattern, Consolidation, Interlobular septal thickening  
         "heart": [0, 1, 2],  # Cardiomegaly, Pericardial effusion, Coronary artery wall calcification  
@@ -1532,7 +1377,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             images, seg_targets, abnormal_targets = images.to(device), seg_targets.to(device), abnormal_targets.to(device)  
 
             seg_pred, abnormal_preds = model(images)  
-            abnormal_pred = abnormal_preds[-1]  # 取最后一个尺度的输出   
+            abnormal_pred = abnormal_preds[-1]  # output of the finest scale
             
             disease_frequencies = [  
                 0.1072, 0.0705, 0.2476, 0.1420, 0.2534, 0.1939, 0.2558, 0.4548,  
@@ -1542,10 +1387,9 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             seg_loss = segmentation_criterion(seg_pred, seg_targets)  
             disease_losses, abnormal_pred_avg = Abnormal_loss(seg_pred, abnormal_pred, abnormal_targets, disease_frequencies)  
             
-            # 收集处理后的预测结果和真实标签  
+            # Collect post-processed predictions and ground truth.
             abnormal_targets_np = abnormal_targets.cpu().numpy()  
             abnormal_pred_avg_np = abnormal_pred_avg.cpu().numpy() 
-            # abnormal_targets_np=1-abnormal_targets_np#将阴性作为1
             # abnormal_pred_avg_np=1-abnormal_pred_avg_np 
 
             for i in range(16):  
@@ -1568,20 +1412,20 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             dice_scores.append(dice_score)
             dice_scores_organ.append(dice_score_organ)
 
-            # 计算NSD
+            # NSD.
             nsd_per_sample = calculate_nsd(seg_pred, seg_targets)  # [B, C]
             nsd_scores_organ.append(nsd_per_sample.cpu().numpy())
             # print(f'dice_score:{dice_score_organ}')
             # print(f'dice_score:{dice_score}') 
             # dice_scores.append(dice_score)  
 
-            # 如果需要保存热图，先存储相关数据  
+            # Stash what the heatmaps will need.
             if save_heatmap and iter in selected_indices:
                 for batch_idx in range(images.size(0)):
                     heatmap_data.append({
                         'predictions': [  
-                            abnormal_preds[0][batch_idx:batch_idx+1].cpu(),  # 低分辨率预测  
-                            abnormal_preds[1][batch_idx:batch_idx+1].cpu()   # 高分辨率预测  
+                            abnormal_preds[0][batch_idx:batch_idx+1].cpu(),  # low resolution
+                            abnormal_preds[1][batch_idx:batch_idx+1].cpu()   # high resolution
                         ], 
                         'segmentation_preds': seg_pred[batch_idx:batch_idx+1].cpu(),
                         'targets': abnormal_targets[batch_idx:batch_idx+1].cpu(),
@@ -1596,20 +1440,20 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
                         'sample_name': sample_names[batch_idx]
                     }) 
 
-    # 将所有样本的Dice系数转换为NumPy数组  
+    # Stack the per-sample Dice coefficients.
     dice_scores_organ = np.array(dice_scores_organ)  
 
-    # 保存为.npy文件  
+    # Save as .npy.
     np.save('dice_scores.npy', dice_scores_organ) 
 
-    # 创建保存混淆矩阵的目录  
+    # Directory for the confusion matrices.
     confusion_matrix_dir = os.path.join(config.work_dir, "test_results","test_confusion_matrices", f"epoch_{epoch}")  
     os.makedirs(confusion_matrix_dir, exist_ok=True) 
-    # 创建保存 ROC 曲线的目录  
+    # Directory for the ROC curves.
     roc_curve_dir = os.path.join(config.work_dir, "test_results", "roc_curves", f"epoch_{epoch}")  
     os.makedirs(roc_curve_dir, exist_ok=True) 
 
-    # 初始化指标数组  
+    # Metric accumulators.
     num_diseases = len(disease_names)  
     tp_sum = np.zeros(num_diseases, dtype=int)  
     tn_sum = np.zeros(num_diseases, dtype=int)  
@@ -1620,65 +1464,65 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     recall_per_disease = np.zeros(num_diseases)  
     accuracy_per_disease = np.zeros(num_diseases)  
     f1_per_disease = np.zeros(num_diseases)  
-    auroc_per_disease = np.zeros(num_diseases)  # 使用 NumPy 数组  
+    auroc_per_disease = np.zeros(num_diseases)
 
-    # 新增列表以收集每个疾病的 y_true 和 y_pred  
+    # Per-disease y_true / y_pred, kept for the ROC curves.
     y_true_list = []  
     y_pred_list = [] 
 
-    # 计算所有指标  
+    # Compute every metric.
     for disease_idx in range(num_diseases):  
         y_true = np.array(all_targets[disease_idx])  
         y_pred_proba = np.array(processed_predictions[disease_idx])  
         y_pred = (y_pred_proba > best_thresholds[disease_idx]).astype(int)  
 
-        # 保存 y_true 和 y_pred_proba，文件名中包含疾病名称  
+        # Save y_true and y_pred_proba, one file per disease.
         y_true_path = os.path.join(roc_curve_dir, f'y_true_{disease_names[disease_idx]}.npy')  
         y_pred_proba_path = os.path.join(roc_curve_dir, f'y_pred_proba_{disease_names[disease_idx]}.npy')  
         
         np.save(y_true_path, y_true)  
         np.save(y_pred_proba_path, y_pred_proba) 
 
-        # 收集 y_true 和 y_pred  
+        # Collect y_true and y_pred.
         y_true_list.append(y_true)  
         y_pred_list.append(y_pred)
 
-        # 计算混淆矩阵并保存  
+        # Confusion matrix.
         cm = confusion_matrix(y_true, y_pred)  
         save_path = plot_confusion_matrix(y_true, y_pred, disease_names[disease_idx], confusion_matrix_dir)  
 
-        # 从混淆矩阵中提取TP、TN、FP、FN  
+        # Extract TP, TN, FP, FN.
         tp = cm[1, 1]  # True Positive  
         tn = cm[0, 0]  # True Negative  
         fp = cm[0, 1]  # False Positive  
         fn = cm[1, 0]  # False Negative  
 
-        # 更新TP、TN、FP、FN的总和  
+        # Accumulate TP, TN, FP, FN.
         tp_sum[disease_idx] = tp  
         tn_sum[disease_idx] = tn  
         fp_sum[disease_idx] = fp  
         fn_sum[disease_idx] = fn 
 
-        # 计算AUROC  
+        # AUROC.
         try:  
             auroc = roc_auc_score(y_true, y_pred_proba)  
         except ValueError:  
             auroc = 0.0  
-        auroc_per_disease[disease_idx] = auroc  # 将AUROC值存储到NumPy数组中  
+        auroc_per_disease[disease_idx] = auroc
 
-        # 计算每个疾病的指标  
+        # Remaining per-disease metrics.
         precision_per_disease[disease_idx] = tp / (tp + fp + 1e-8)  
         recall_per_disease[disease_idx] = tp / (tp + fn + 1e-8)  
         accuracy_per_disease[disease_idx] = (tp + tn) / (tp + tn + fp + fn + 1e-8)  
         f1_per_disease[disease_idx] = 2 * precision_per_disease[disease_idx] * recall_per_disease[disease_idx] / (precision_per_disease[disease_idx] + recall_per_disease[disease_idx] + 1e-8)
 
-        # 计算并绘制每种疾病的 ROC 曲线  
+        # ROC curve for this disease.
         fpr, tpr, _ = roc_curve(y_true, y_pred_proba)  
         roc_auc = auc(fpr, tpr)  
 
         plt.figure()  
         plt.plot(fpr, tpr, color='blue', lw=2, label='ROC curve (area = {:.2f})'.format(roc_auc))  
-        plt.plot([0, 1], [0, 1], color='red', lw=2, linestyle='--')  # 参考线  
+        plt.plot([0, 1], [0, 1], color='red', lw=2, linestyle='--')  # chance line
         plt.xlim([0.0, 1.0])  
         plt.ylim([0.0, 1.05])  
         plt.xlabel('False Positive Rate')  
@@ -1686,12 +1530,12 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         plt.title(f'ROC Curve for {disease_names[disease_idx]}')  
         plt.legend(loc='lower right')  
         
-        # 保存 ROC 曲线图  
+        # Save the ROC curve.
         roc_curve_path = os.path.join(roc_curve_dir, f'roc_curve_disease_{disease_idx}.png')  
         plt.savefig(roc_curve_path)  
         plt.close()  
 
-    # 初始化器官指标数组  
+    # Organ metric accumulators.
     num_organs = len(organ_names)  
     organ_tp_sum = np.zeros(num_organs)  
     organ_tn_sum = np.zeros(num_organs)  
@@ -1704,20 +1548,20 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     organ_f1 = np.zeros(num_organs)  
     organ_auroc = np.zeros(num_organs)  
 
-    # 计算每个器官的指标  
+    # Per-organ metrics.
     for organ_idx, (organ, disease_indices) in enumerate(organ_disease_mapping.items()):  
-        # 收集该器官所有疾病的预测和真实值  
+        # Gather predictions and labels for every disease of this organ.
         organ_predictions = []  
         organ_targets = []  
-        organ_pred_proba = []  # 新增用于存储预测概率  
-        # 初始化TP、TN、FP、FN  
+        organ_pred_proba = []
+        # TP, TN, FP, FN for this organ.
         organ_tp = organ_tn = organ_fp = organ_fn = 0   
 
-        # 收集该器官所有疾病的预测和真实值，并计算TP、TN、FP、FN  
+        # Accumulate predictions, labels and the confusion counts.
         for disease_idx in disease_indices:  
             organ_targets.extend(y_true_list[disease_idx])  
-            organ_predictions.extend(y_pred_list[disease_idx])  # 经过阈值处理的预测值  
-            organ_pred_proba.extend(processed_predictions[disease_idx])  # 原始预测概率  
+            organ_predictions.extend(y_pred_list[disease_idx])          # thresholded
+            organ_pred_proba.extend(processed_predictions[disease_idx])  # raw probabilities
             
             
             organ_tp += tp_sum[disease_idx]  
@@ -1725,34 +1569,34 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             organ_fp += fp_sum[disease_idx]  
             organ_fn += fn_sum[disease_idx]  
 
-        # 更新器官的总和  
+        # Accumulate the organ totals.
         organ_tp_sum[organ_idx] = organ_tp  
         organ_tn_sum[organ_idx] = organ_tn  
         organ_fp_sum[organ_idx] = organ_fp  
         organ_fn_sum[organ_idx] = organ_fn 
 
 
-        # 计算该器官的AUROC  
+        # Organ AUROC.
         organ_auroc_value = roc_auc_score(organ_targets, organ_pred_proba) if organ_targets else 0.0  
         organ_auroc[organ_idx] = organ_auroc_value  
 
-        # 计算器官级别的指标  
+        # Organ-level metrics.
         total = organ_tp + organ_fp + 1e-8  
         organ_precision[organ_idx] = organ_tp / total  
         organ_recall[organ_idx] = organ_tp / (organ_tp + organ_fn + 1e-8)  
         organ_accuracy[organ_idx] = (organ_tp + organ_tn) / (organ_tp + organ_tn + organ_fp + organ_fn + 1e-8)  
         organ_f1[organ_idx] = 2 * organ_precision[organ_idx] * organ_recall[organ_idx] / (organ_precision[organ_idx] + organ_recall[organ_idx] + 1e-8)  
 
-        # 绘制混淆矩阵并保存  
+        # Plot and save the confusion matrix.
         save_path, cm = plot_confusion_matrix(organ_targets, organ_predictions, organ, confusion_matrix_dir)  
 
-        # 计算并绘制该器官的 ROC 曲线  
+        # ROC curve for this organ.
         fpr, tpr, _ = roc_curve(organ_targets, organ_pred_proba)  
         organ_roc_auc = auc(fpr, tpr)  
 
         plt.figure()  
         plt.plot(fpr, tpr, color='green', lw=2, label='ROC curve (area = {:.2f})'.format(organ_roc_auc))  
-        plt.plot([0, 1], [0, 1], color='red', lw=2, linestyle='--')  # 参考线  
+        plt.plot([0, 1], [0, 1], color='red', lw=2, linestyle='--')  # chance line
         plt.xlim([0.0, 1.0])  
         plt.ylim([0.0, 1.05])  
         plt.xlabel('False Positive Rate')  
@@ -1760,12 +1604,12 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         plt.title(f'ROC Curve for {organ}')  
         plt.legend(loc='lower right')  
         
-        # 保存 ROC 曲线图  
+        # Save the ROC curve.
         organ_roc_curve_path = os.path.join(roc_curve_dir, f'roc_curve_organ_{organ}.png')  
         plt.savefig(organ_roc_curve_path)  
         plt.close()  
 
-    # 计算平均指标  
+    # Averages.
     avg_precision = np.mean(precision_per_disease)  
     avg_recall = np.mean(recall_per_disease)  
     avg_accuracy = np.mean(accuracy_per_disease)  
@@ -1778,7 +1622,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     avg_seg_loss = np.mean(seg_loss_list) if seg_loss_list else 0.0   
  
 
-    # 记录平均指标  
+    # Log the averages.
     confusion_matrices = {}  
     log_info = f"Test Epoch {epoch} Summary:\n"  
     log_info += "Overall Metrics:\n"  
@@ -1795,7 +1639,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
 
     log_info += "\nPer-Disease Metrics and Confusion Matrices:"  
     for i, disease in enumerate(disease_names):  
-        # 添加到日志信息  
+        # Append to the log.
         log_info += f"\n{disease}:\n"  
         log_info += f"Best Threshold: {best_thresholds[i]:.3f}, "  
         log_info += f"Loss: {np.mean(abnormal_loss_list[i]):.4f}, "  
@@ -1808,14 +1652,14 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         log_info += f"TN: {tn_sum[i]}, FP: {fp_sum[i]}\n"  
         log_info += f"FN: {fn_sum[i]}, TP: {tp_sum[i]}\n"  
 
-    # 计算并保存每个器官的混淆矩阵  
-    # 后处理
+    # Per-organ confusion matrices.
+    # Post-processing.
     dice_scores_organ = np.concatenate(dice_scores_organ, axis=0)  # [N, C]
     nsd_scores_organ = np.concatenate(nsd_scores_organ, axis=0)    # [N, C]
     
     avg_dice_per_organ = dice_scores_organ.mean(axis=0)
     avg_nsd_per_organ = nsd_scores_organ.mean(axis=0)
-    # 在日志中添加报告
+    # Append the report to the log.
     log_info += "\nOrgan-wise Segmentation Metrics:\n"
     for idx, name in enumerate(organ_names):
         log_info += (f"{name}: Dice={avg_dice_per_organ[idx]:.4f} ± {dice_scores_organ[:, idx].std():.4f}, "
@@ -1823,7 +1667,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         
     log_info += "\n\nOrgan-level Confusion Matrices:"  
     for organ_idx, (organ, disease_indices) in enumerate(organ_disease_mapping.items()):  
-        # 添加到日志信息  
+        # Append to the log.
         log_info += f"\n{organ}:\n"  
         log_info += f"AUROC: {organ_auroc[organ_idx]:.4f}, "  
         log_info += f"Accuracy: {organ_accuracy[organ_idx]:.4f}, "  
@@ -1831,7 +1675,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         log_info += f"Recall: {organ_recall[organ_idx]:.4f}, "  
         log_info += f"F1: {organ_f1[organ_idx]:.4f}\n"  
 
-        # 使用记录的TP、TN、FP、FN构建混淆矩阵  
+        # Rebuild the confusion matrix from the accumulated counts.
         tn = organ_tn_sum[organ_idx]  
         fp = organ_fp_sum[organ_idx]  
         fn = organ_fn_sum[organ_idx]  
@@ -1841,14 +1685,14 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
         log_info += f"TN: {tn}, FP: {fp}\n"  
         log_info += f"FN: {fn}, TP: {tp}\n"
 
-    # 计算整体指标
+    # Overall metrics.
     total_tn = sum(organ_tn_sum)  
     total_fp = sum(organ_fp_sum)  
     total_fn = sum(organ_fn_sum)  
     total_tp = sum(organ_tp_sum)  
     total_cm = np.array([[total_tn, total_fp], [total_fn, total_tp]], dtype=int)  
 
-    # 保存总体混淆矩阵   
+    # Save the overall confusion matrix.
     plt.figure(figsize=(10, 8))  
     sns.heatmap(total_cm, annot=True, fmt='d', cmap='Blues')  
     plt.title('Overall Confusion Matrix')  
@@ -1865,7 +1709,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     log_info += f"Total True Positive: {total_tp}\n"  
     log_info += f"Total Samples: {total_tn + total_fp + total_fn + total_tp}\n"  
 
-    # 计算总体指标  
+    # Overall metrics.
     total_accuracy = (total_tp + total_tn) / (total_tp + total_tn + total_fp + total_fn + 1e-8)  
     total_precision = total_tp / (total_tp + total_fp + 1e-8)  
     total_recall = total_tp / (total_tp + total_fn + 1e-8)  
@@ -1877,7 +1721,7 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
     log_info += f"Recall: {total_recall:.4f}\n"  
     log_info += f"F1 Score: {total_f1:.4f}\n" 
 
-    # 在找到最佳阈值后，生成和保存热图  
+    # Render the heatmaps now that the thresholds are known.
     if save_heatmap and heatmap_data:  
         logger.info("Generating and saving heatmaps with optimal thresholds...")  
         for data in heatmap_data:  
@@ -1896,19 +1740,19 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             )  
             logger.info(f"Successfully saved heatmap for sample {data['sample_name']} at epoch {epoch}")  
 
-            # 分割可视化  
-            depth = data['images'].shape[1]  # 获取深度维度的大小  
-            middle_slice = depth // 2  # 计算中间切片的索引  
+            # Segmentation visualisation.
+            depth = data['images'].shape[1]
+            middle_slice = depth // 2
         
-        # 分割可视化  
-        for vis_sample in vis_samples:  # 遍历 vis_samples 中的每个样本  
+        # Segmentation visualisation.
+        for vis_sample in vis_samples:
             vis_path = visualize_segmentation(  
                 vis_sample['image'],      # [C, D, H, W]  
                 vis_sample['target'],     # [C, D, H, W]  
                 vis_sample['prediction'], # [C, D, H, W]  
                 organ_names,  
                 epoch,  
-                save_dir=os.path.join(save_dir, f'segmentation_visualizations/sample_{vis_sample["sample_name"]}')  # 保存路径  
+                save_dir=os.path.join(save_dir, f'segmentation_visualizations/sample_{vis_sample["sample_name"]}')
             )  
             logger.info(f"Successfully saved segmentation visualization for sample {vis_sample['sample_name']} at epoch {epoch}")  
 
@@ -1919,11 +1763,10 @@ def test_one_epoch(test_loader, model, segmentation_criterion, abnormal_criterio
             #     middle_slice,  
             #     organ_names,  
             #     epoch,  
-            #     save_dir=os.path.join(save_dir, f'segmentation_visualizations/sample_{data["sample_name"]}')  # 保存路径  
             # )  
             # logger.info(f"Successfully saved segmentation visualization for sample {data['sample_name']} at epoch {epoch}")  
 
     print(log_info)  
     logger.info(log_info)  
 
-    return avg_loss  # 返回测试损失
+    return avg_loss

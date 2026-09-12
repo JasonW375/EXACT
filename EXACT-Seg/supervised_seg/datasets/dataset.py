@@ -180,20 +180,32 @@ class My_datasets_5fold(Dataset):
         """  
         return self.disease_names
 
-class My_datasets_supervised(Dataset):  
-    def __init__(self, h5_path,train=False, val=False, test=False,
-        mask_dir="/path/to/bxg/storage/ReXGroundingCT/lesion_mask", seed=42):   
-        """  
-        初始化数据集  
-        :param h5_path: HDF5 文件路径  
-        :param train: 是否为训练集  
-        :param val: 是否为验证集  
-        :param test: 是否为测试集  
-        :param seed: 随机种子，用于划分一致性  
-        """  
-        super(My_datasets_supervised, self).__init__()  
-        self.h5_path = h5_path  
-        self.mask_dir=mask_dir
+class My_datasets_supervised(Dataset):
+    def __init__(self, h5_path, train=False, val=False, test=False,
+        mask_dir=None, seed=42, test_split="heldout"):
+        """Supervised segmentation dataset.
+
+        :param h5_path: HDF5 store holding one group per study
+        :param train/val/test: which split of the store to expose
+        :param mask_dir: directory of {study_id}.nii.gz lesion masks. Only used
+            for stores whose name contains "total_processed" (the ReXGroundingCT
+            setup, where masks live outside the store); other cohorts read the
+            'mask' dataset in the store itself.
+        :param seed: random seed, so the split is reproducible
+        :param test_split: which studies --task test evaluates. "heldout"
+            (default) scores only the studies the fine-tune did not train on,
+            reproducing the original experiments: 16 studies for COVID
+            (coronacases_003..010 + 8 radiopaedia), 40 of 50 for MosMed, all
+            157 mask-bearing valid studies for ReXGroundingCT. "all" scores
+            every study in the store, including the training split, which is
+            handy for exporting predictions but inflates Dice.
+        """
+        super(My_datasets_supervised, self).__init__()
+        self.h5_path = h5_path
+        self.mask_dir = mask_dir
+        assert test_split in ("heldout", "all"), (
+            "test_split must be heldout or all; got %r" % (test_split,))
+        self.test_split = test_split
         # 定义需要的器官索引  
 
         
@@ -203,35 +215,37 @@ class My_datasets_supervised(Dataset):
         if not os.path.exists(self.h5_path):  
             raise FileNotFoundError(f"HDF5 文件未找到: {self.h5_path}")  
 
-        # 打开 HDF5 文件，记录所有样本的名称  
-        with h5py.File(self.h5_path, 'r') as f:  
-            self.data_keys = list(f.keys())  
-        # self.data_keys=[k for k in self.data_keys if k.startswith('coronacases')]
+        # Record every sample name in the store.
+        with h5py.File(self.h5_path, 'r') as f:
+            self.data_keys = list(f.keys())
         if "total_processed" in self.h5_path.lower():
-            assert os.path.exists(self.mask_dir) and os.path.isdir(self.mask_dir),f"mask目录不存在: {self.mask_dir}"
-            # 只计算有mask的样本key
-            
-            seg_files = [fn for fn in os.listdir(mask_dir) if fn.endswith(".nii.gz")]
+            assert self.mask_dir and os.path.isdir(self.mask_dir), (
+                "This store keeps its lesion masks outside the HDF5 file; pass "
+                "--mask-dir (or set config.mask_dir). Got: %r" % (self.mask_dir,))
+
+            # Keep only the studies that actually have a mask on disk.
+            seg_files = [fn for fn in os.listdir(self.mask_dir) if fn.endswith(".nii.gz")]
             seg_keys = {
-                os.path.splitext(os.path.splitext(fn)[0])[0].strip()  # 去掉 .nii.gz 并 strip
+                os.path.splitext(os.path.splitext(fn)[0])[0].strip()
                 for fn in seg_files
             }
-            json_path = "/path/to/bxg/storage/ReXGroundingCT/dataset.json"
-            assert os.path.exists(json_path),f"json文件不存在: {json_path}"
 
-            self.allowed_keys=seg_keys&set(self.data_keys)
+            self.allowed_keys = seg_keys & set(self.data_keys)
             self.data_keys = list(self.allowed_keys)
-            assert len(self.data_keys)>0,f"没有找到有mask的样本"
+            assert len(self.data_keys) > 0, (
+                "No study in %s has a mask in %s" % (self.h5_path, self.mask_dir))
 
             print("num of samples with masks:", len(self.data_keys))
-        if "covid_ct" in self.h5_path.lower():
-            self.data_keys=[k for k in self.data_keys if k.startswith('coronacases')]
         self.data_keys.sort()
         # 设置随机种子并随机打乱索引  
         torch.manual_seed(seed)  
 
 
         if "covid_ct" in self.h5_path.lower():
+            # Original protocol (results/covidfull_full_18, the run behind
+            # seg_covid_best.pth): fine-tune on the first two studies of each
+            # source, test on the remaining 16 (coronacases_003..010 plus the
+            # eight radiopaedia studies).
             coronas = [k for k in self.data_keys if k.startswith("coronacases")]
             radios   = [k for k in self.data_keys if k.startswith("radio")]
 
@@ -239,35 +253,26 @@ class My_datasets_supervised(Dataset):
             coronas.sort()
             radios.sort()
 
-            # 用户需求：仅使用指定两个 coronacases 进行训练，其他全部用于测试
-            fixed_train_coronas = ["coronacases_003", "coronacases_007"]
-            # 过滤出存在于数据集的指定键
-            train_coronas = [k for k in fixed_train_coronas if k in coronas]
-            if len(train_coronas) == 0:
-                raise ValueError("指定的训练样本未在数据集中找到：coronacases_003, coronacases_007")
-
-            # 训练集只包含指定 coronacases，不混入 radio
-            train_keys = train_coronas
+            # 每组排序后前 2 个做训练，其余全部用于测试
+            train_keys = coronas[:2] + radios[:2]
+            if len(train_keys) < 4:
+                raise ValueError(
+                    "COVID split expects 2 coronacases + 2 radiopaedia studies "
+                    "to fine-tune on; found: %r" % (train_keys,))
 
             # 测试样本：除训练指定外的全部样本（包括剩余 coronacases 与所有 radio）
-            test_coronas = [k for k in coronas if k not in train_coronas]
-            test_radios  = radios  # radios 全部进测试
+            test_coronas = coronas[2:]
+            test_radios  = radios[2:]
             test_keys = test_coronas + test_radios
 
             if train:
                 self.subset_indices = [self.data_keys.index(k) for k in train_keys]
             elif test:
-                # 仅使用 coronacases_002 做测试
-                chosen = ["coronacases_002"]
-                chosen = [k for k in chosen if k in self.data_keys]
-                if len(chosen) == 0:
-                    raise ValueError("指定的测试样本 coronacases_002 不在数据集中。")
-                self.subset_indices = [self.data_keys.index(k) for k in chosen]
-
-                # 原有逻辑（测试集使用剩余样本）保留但注释掉
-                # elif val or test:
-                #     # val 与 test 都使用剩余样本
-                #     self.subset_indices = [self.data_keys.index(k) for k in test_keys]
+                if self.test_split == "all":
+                    self.subset_indices = list(range(len(self.data_keys)))
+                else:
+                    # Every study the fine-tune did not train on.
+                    self.subset_indices = [self.data_keys.index(k) for k in test_keys]
             elif val:
                 # 验证沿用原默认逻辑（剩余样本集）
                 self.subset_indices = [self.data_keys.index(k) for k in test_keys]
@@ -275,27 +280,42 @@ class My_datasets_supervised(Dataset):
                 raise ValueError("必须指定 train, val 或 test 中的一个为 True")
 
         else:
-            # ===== 原有通用划分逻辑 =====
+            # Generic split: a fixed slice trains, the remainder is held out.
+            # This is the path both MosMed and ReXGroundingCT fine-tunes took:
+            # MosMed trains on 10 of 50 and tests on the remaining 40; ReX
+            # fine-tunes on random_total_processed_data.h5 and is evaluated on
+            # valid_total_processed_data.h5 (a different store), so --task test
+            # scores every mask-bearing study in the test store.
             indices = torch.randperm(len(self.data_keys)).tolist()
-            if train or val:
-                if "mosmed" in self.h5_path.lower():
-                    train_size = 10
-                elif "tbad" in self.h5_path.lower():
-                    train_size = 62
-                else:
-                    total_size = len(self.data_keys)
-                    train_size = int(total_size * 15 / 16)
-                val_size = len(self.data_keys) - train_size
-
-                self.train_indices = indices[:train_size]
-                self.val_indices = indices[train_size:train_size + val_size]
-
-                self.subset_indices = self.train_indices if train else self.val_indices
-            elif test:
-                # 通用分支下保持原逻辑（使用全部数据）；如需精确筛选，可按上面 covid_ct 分支方式仿造
-                self.subset_indices = indices
+            if "mosmed" in self.h5_path.lower():
+                train_size = 10
+            elif "tbad" in self.h5_path.lower():
+                train_size = 62
             else:
-                raise ValueError("必须指定 train, val 或 test 中的一个为 True") 
+                train_size = int(len(self.data_keys) * 15 / 16)
+
+            self.train_indices = indices[:train_size]
+            self.val_indices = indices[train_size:]
+
+            if train:
+                self.subset_indices = self.train_indices
+            elif val:
+                self.subset_indices = self.val_indices
+            elif test:
+                if self.test_split == "all":
+                    # Scores the training studies too, so Dice reads high.
+                    self.subset_indices = indices
+                elif "mosmed" in self.h5_path.lower():
+                    # Same store for train and test: hold out the 40 studies
+                    # the fine-tune never saw.
+                    self.subset_indices = self.val_indices
+                else:
+                    # ReXGroundingCT: the test store is disjoint from the
+                    # training store, so every study in it is held out.
+                    self.subset_indices = list(range(len(self.data_keys)))
+            else:
+                raise ValueError(
+                    "Exactly one of train, val or test must be True")
         print("============================================")
         print(f"My_datasets_supervised initialized with {len(self.subset_indices)} samples.")
         print("============================================")
