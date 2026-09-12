@@ -570,5 +570,8 @@ def main():
         print("   evaluation_summary.json - summary comparison across all files (95% CI)")
         print(f"\nConfidence interval settings: bootstrap samples={N_BOOTSTRAPS}, CI level={CONFIDENCE_LEVEL*100}%")
 
+    # Exit non-zero when any file failed, so callers can tell success from failure
+    return 1 if failed else 0
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

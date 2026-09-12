@@ -649,7 +649,7 @@ def main():
         print("3. Verify the classifier model path and that the model file exists")
         print("4. Check the CSV format and column names")
         print("5. Confirm that calc_scores_withci.py and nlg_metrics_withci.py are in place")
-        print("6. Make sure the required NLG libraries are installed: nltk, rouge_score, joblib")
+        print("6. Make sure the required NLG libraries are installed: nltk, pycocoevalcap, joblib")
 
     if successful > 0:
         print("\nResult files:")
@@ -665,5 +665,8 @@ def main():
         print(f"NLG speedup: {N_JOBS} parallel workers (progress shown live)")
         print(f"Metrics computed: classification (CI) + CRG + NLG (CI)")
 
+    # Exit non-zero when any file failed, so callers can tell success from failure
+    return 1 if failed else 0
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
