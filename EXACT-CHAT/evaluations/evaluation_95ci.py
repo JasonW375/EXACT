@@ -37,6 +37,12 @@ CLS_SCRIPT   = CODE_DIR / "calc_scores_withci.py"  # CI-enabled classification s
 CRG_SCRIPT   = CODE_DIR / "crg_score.py"
 NLG_SCRIPT   = CODE_DIR / "nlg_metrics_withci.py"  # CI-enabled NLG scorer
 
+# Bootstrap settings for the confidence intervals
+N_BOOTSTRAPS = 1000        # number of bootstrap resamples
+CONFIDENCE_LEVEL = 0.95    # confidence level (95% CI)
+RANDOM_STATE = 42          # random seed
+N_JOBS = 8                 # parallel workers for NLG evaluation
+
 def extract_checkpoint_number(filename: str) -> int:
     """Extract the checkpoint number from a filename so results can be ordered."""
     match = re.search(r'checkpoint(\d+)', filename)
