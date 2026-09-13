@@ -15,7 +15,8 @@ pathological context, and drive five downstream tasks from one backbone:
 zero-shot and fine-tuned multi-disease diagnosis, zero-shot anomaly localization,
 supervised segmentation (EXACT-Seg), and grounded report generation (EXACT-CHAT).
 
-📄 **Paper:** *link to be added upon publication*
+📄 **Paper:** [EXACT: an explainable anomaly-aware vision foundation model for analysis
+of 3D chest CT](https://arxiv.org/abs/2604.24146) (arXiv:2604.24146)
 
 EXACT extends our earlier [Chest-OMDL](https://openreview.net/forum?id=ns6nq592HX)
 (MIDL 2025) from organ-specific multi-disease detection into a general-purpose
@@ -226,7 +227,7 @@ Intensities are comparable within a volume but not across volumes.
 
 ---
 
-## Reproducing the results
+## Inference
 
 ### 1. Multi-disease diagnosis — zero-shot
 
@@ -364,28 +365,22 @@ python train_supervised.py --task test \
 # swap in seg_covid_best.pth / seg_mosmed_best.pth for the other cohorts
 ```
 
-Each checkpoint is fine-tuned on its own cohort, so `--test-data` has to match
-the weights you load. The lesion head is wired differently across cohorts --
-`seg_rex_best.pth` reads the 18-channel abnormality branch while the COVID and
-MosMed checkpoints read the 7-channel organ branch -- and the script picks the
+Each checkpoint is fine-tuned on its own cohort, so `--test-data` has to match the
+weights you load. The lesion head differs across cohorts, but the script selects the
 right one by inspecting the checkpoint, so there is nothing to configure.
 
 ReXGroundingCT keeps its masks outside the HDF5 store; for that cohort point
-`--mask-dir` at the output of `resize.py`. Paths can also be set in
-`configs/config_setting.py` instead of on the command line, and
-`zero_shot_seg/configs/config_setting.py` works the same way.
+`--mask-dir` at the output of `resize.py`.
 
-Training uses `--task train` with `--train-data`. Streaming metrics to Weights &
-Biases or SwanLab is opt-in via `--track`; without it no account, API key or
-network access is needed.
+Training uses `--task train` with `--train-data`.
 
 ### 5. Report generation (EXACT-CHAT)
 
 **Step 1 — encode CT volumes.** EXACT-CHAT consumes pre-computed visual tokens, not
 raw CT. `llava/serve/encode_script.py` runs the frozen Y-Mamba backbone and writes
-one `.npz` per study with the embedding under key `"arr"`. The
-`--vision_tower openai/clip-vit-large-patch14-336` argument in the training scripts
-is an inherited LLaVA placeholder; no CLIP forward pass ever happens.
+one `.npz` per study. The `--vision_tower openai/clip-vit-large-patch14-336`
+argument in the training scripts is an inherited LLaVA placeholder; no CLIP forward
+pass ever happens, and no CLIP weights are needed.
 
 **Step 2 — generate.** The LoRA adapter is applied at load time, so **no weight
 merging step is needed**: pass the adapter as `--model-path` and the base LLM as
@@ -406,18 +401,11 @@ python -m llava.serve.ctchat_validation_llama \
     --max-new-tokens 1024
 ```
 
-Invoke it with `python -m` as shown. Running the file by path
-(`python llava/serve/ctchat_validation_llama.py`) puts `llava/serve/` on
-`sys.path` instead of the repository root and fails on `import llava`.
+Invoke it with `python -m` as shown; running the file by path breaks `import llava`.
 
-`--eval-json` is a conversation JSON: one entry per study with an `image` field
-and a `conversations` list. `--encoding-dir` holds the matching `.npz` files from
-Step 1; the `image` field is looked up there with its extension replaced by
-`.npz`. Predictions are written as `{"image": ..., "conversations_out": [...]}`,
-with the Llama-3 `<|eot_id|>` marker left in place — the evaluation scripts strip
-it.
-
-Each prompt embeds the AAmap-derived per-disease predictions as text; see
+`--eval-json` is a conversation JSON, one entry per study; `--encoding-dir` holds the
+matching `.npz` files from Step 1, looked up by the `image` field with the extension
+replaced. Each prompt embeds the AAmap-derived per-disease predictions as text — see
 [`utils/generate_report_json.py`](EXACT-CHAT/utils/generate_report_json.py) and
 [`utils/filter_report_with_predictions.py`](EXACT-CHAT/utils/filter_report_with_predictions.py)
 for how the evaluation JSON is assembled.
@@ -431,15 +419,12 @@ python download_RoBERTa_tokenizer.py         # backbone + tokenizer
 mv models/RadBertClassifier.pth roberta_local/
 ```
 
-Only these downloads need network access. The evaluation itself runs offline:
-`classifier.py` and `dataset.py` set `TRANSFORMERS_OFFLINE=1` and read the
-backbone and tokenizer from `roberta_local/`.
+Only these downloads need network access; the evaluation itself runs offline.
 
-The evaluation scripts do not read an inference output directly. For each
-prediction file they expect a folder under `--base_dir`, named after that file's
-stem, holding `result_transformat.json`, `ground_truth.json` and
-`ground_truth.csv`. Build them with `prepare_eval_files.py`, passing the cohort's
-inference input as the reference — its `gpt` turns are the ground-truth reports:
+The evaluation scripts do not read an inference output directly — they read a
+prepared folder under `--base_dir`, named after the prediction file's stem. Build it
+with `prepare_eval_files.py`, passing the cohort's inference input as the reference
+(its `gpt` turns are the ground-truth reports):
 
 ```bash
 python prepare_eval_files.py \
@@ -517,6 +502,12 @@ and audited:
 | `--threshold-source` | `checkpoint` | `checkpoint` uses per-disease thresholds fitted on the validation split. `fit-on-test` refits them on the test set, which is **optimistically biased**. |
 | `--positive-class` | `present` | `present` scores disease presence as the positive class (the usual detection convention). `absent` scores disease *absence* as positive; since these cohorts are negative-dominated, this raises F1 substantially. |
 
+**Why the `absent` convention exists.** It follows CT-CLIP, the reference model on
+CT-RATE, which scores disease *absence* as the positive class. Reporting the same
+convention is what makes our F1 directly comparable to the numbers published there.
+It is offered as an option for that comparison, not as the recommended default — for
+a plain detection setting, use `present`.
+
 The tables in the manuscript were produced with `fit-on-test` + `absent`, available
 as a single flag:
 
@@ -563,6 +554,21 @@ averaging silently.
 
 ## Citation
 
+**EXACT (arXiv 2026):**
+
+```bibtex
+@article{bai2026exact,
+  title   = {{EXACT}: an explainable anomaly-aware vision foundation model for
+             analysis of {3D} chest {CT}},
+  author  = {Xuguang Bai and Mingxuan Liu and Tongxi Song and Yifei Chen and
+             Hongjia Yang and Kasidit Anmahapong and Zihan Li and Ying Zhou and
+             Qiyuan Tian},
+  journal = {arXiv preprint arXiv:2604.24146},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2604.24146}
+}
+```
+
 **Chest-OMDL (MIDL 2025):**
 
 ```bibtex
@@ -577,5 +583,3 @@ averaging silently.
   url       = {https://openreview.net/forum?id=ns6nq592HX}
 }
 ```
-
-**EXACT** — citation will be updated upon publication.
