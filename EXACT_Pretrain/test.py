@@ -284,7 +284,12 @@ def evaluate(probs, labels, threshold_source, positive_class, ckpt_thresholds):
         else:
             threshold = threshold_at_roc_corner(y_true, y_prob)
 
-        y_pred = (y_prob > threshold).astype(int)
+        # `>=`, not `>`: roc_curve returns observed scores as thresholds and pairs
+        # each one with the operating point reached by `score >= threshold`. Using
+        # `>` drops the study sitting exactly on the threshold out of the positive
+        # predictions, which lands the model on a different point than the one
+        # threshold_at_roc_corner selected.
+        y_pred = (y_prob >= threshold).astype(int)
         tp = int(((y_pred == 1) & (y_true == 1)).sum())
         fp = int(((y_pred == 1) & (y_true == 0)).sum())
         fn = int(((y_pred == 0) & (y_true == 1)).sum())

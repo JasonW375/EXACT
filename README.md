@@ -523,9 +523,19 @@ split (1,564 studies, all 18 findings) gives:
 
 | Convention | AUROC | F1 | Accuracy |
 |---|---|---|---|
-| `--reproduce-paper` (`fit-on-test` + `absent`) | 0.830 | 0.835 | 0.767 |
+| `--reproduce-paper` (`fit-on-test` + `absent`) | 0.830 | 0.836 | 0.768 |
 | defaults (`checkpoint` + `present`) | 0.830 | 0.516 | 0.746 |
 | *published, EXACT (Zero-shot) on CT-RATE* | *0.830* | *0.836* | *0.768* |
+
+The first row reproduces the published one exactly. It did not until
+2026-10-05: `evaluate()` binarised with `y_prob > threshold`, while
+`roc_curve` pairs each threshold with the operating point reached by
+`score >= threshold`. The `>` dropped the single study sitting on the
+threshold out of the positive predictions in each of the 18 channels, which
+cost 0.0005 of macro F1 and 0.0006 of accuracy and printed 0.835 / 0.767.
+AUROC is threshold-free and was never affected. Only `fit-on-test` was hit,
+because only there is the threshold an observed score; the `checkpoint` row
+is unchanged.
 
 We report both conventions so the difference is explicit rather than buried.
 
